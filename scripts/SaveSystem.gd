@@ -137,6 +137,7 @@ func _compute_idle(last_played: float) -> void:
 	var eff: float = minf(elapsed, cap_seconds)
 
 	var income: float = Posts.auto_income_per_second() * eff * Prestige.offline_mult()
+	income += Employees.income_per_second() * eff * Prestige.income_mult() * Prestige.offline_mult()
 
 	var ticks: int = clampi(int(eff / SECONDS_PER_TICK), 0, MAX_OFFLINE_TICKS)
 	for i in ticks:

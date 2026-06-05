@@ -43,8 +43,6 @@ func _process(delta: float) -> void:
 
 func global_mult() -> float:
 	var m := 1.0
-	if has_node("/root/Employees"):
-		m *= Employees.global_income_multiplier()
 	if has_node("/root/Prestige"):
 		m *= Prestige.income_mult()
 	if boost_seconds_left > 0.0:

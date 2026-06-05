@@ -1328,7 +1328,9 @@ func _centered_line(text: String, size: int, color: Color) -> Label:
 	return lbl
 
 func _debug_idle(hours: float) -> void:
-	var income: float = Posts.auto_income_per_second() * hours * 3600.0
+	var secs: float = hours * 3600.0
+	var income: float = Posts.auto_income_per_second() * secs * Prestige.offline_mult()
+	income += Employees.income_per_second() * secs * Prestige.income_mult() * Prestige.offline_mult()
 	var ticks: int = clampi(int(hours * 3600.0 / 900.0), 0, 48)
 	for i in ticks:
 		Economy.advance_tick()
