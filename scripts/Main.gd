@@ -8,7 +8,7 @@ var NAV := [
 	{ "id": "colecao", "label": "Coleção" },
 	{ "id": "mais", "label": "Mais" },
 ]
-var EXTRA_PAGES := ["contratos", "mochila", "noticias", "viajar"]
+var EXTRA_PAGES := ["contratos", "prestigio", "mochila", "noticias", "viajar"]
 
 var COL_BG: Color
 var COL_CARD: Color
@@ -56,6 +56,8 @@ func _ready() -> void:
 	Posts.posts_changed.connect(_refresh_home)
 	Posts.collected.connect(_on_collected)
 	Contracts.contracts_changed.connect(_refresh_contratos)
+	Prestige.prestige_changed.connect(_refresh_prestigio)
+	Prestige.prestiged.connect(_on_prestiged)
 	_on_money_changed(GameState.money)
 	_on_gems_changed(GameState.gems)
 	_on_city_changed(GameState.current_city_id)
@@ -382,6 +384,7 @@ func _refresh_all() -> void:
 	_refresh_employees()
 	_refresh_collection()
 	_refresh_contratos()
+	_refresh_prestigio()
 	_refresh_mais()
 
 func _refresh_home() -> void:
@@ -589,17 +592,22 @@ func _refresh_mais() -> void:
 	var contratos_label: String = "Contratos"
 	if done > 0:
 		contratos_label = "Contratos  (%d pronto%s!)" % [done, "s" if done > 1 else ""]
+	var prest_label: String = "Prestígio"
+	if Prestige.can_prestige():
+		prest_label = "Prestígio  (+%d disponível!)" % Prestige.pp_gain(GameState.money)
 	var items := [
-		{ "id": "contratos", "label": contratos_label },
-		{ "id": "viajar", "label": "Viajar entre cidades" },
-		{ "id": "mochila", "label": "Mochila" },
-		{ "id": "noticias", "label": "Notícias do mercado" },
+		{ "id": "prestigio", "label": prest_label, "hot": Prestige.can_prestige() },
+		{ "id": "contratos", "label": contratos_label, "hot": done > 0 },
+		{ "id": "viajar", "label": "Viajar entre cidades", "hot": false },
+		{ "id": "mochila", "label": "Mochila", "hot": false },
+		{ "id": "noticias", "label": "Notícias do mercado", "hot": false },
 	]
 	for it in items:
 		var b := Button.new()
 		b.text = it.label
-		var fill: Color = Style.C_GREEN if (it.id == "contratos" and done > 0) else Style.C_CARD_ALT
-		var fg: Color = Color.WHITE if (it.id == "contratos" and done > 0) else Style.C_INK
+		var hot: bool = it.hot
+		var fill: Color = (Style.C_MAGENTA if it.id == "prestigio" else Style.C_GREEN) if hot else Style.C_CARD_ALT
+		var fg: Color = Color.WHITE if hot else Style.C_INK
 		_style_button(b, fill, fg, 30, 104)
 		b.pressed.connect(_show_page.bind(it.id))
 		v.add_child(b)
@@ -650,6 +658,146 @@ func _refresh_contratos() -> void:
 func _claim_contract(c: Dictionary) -> void:
 	if Contracts.claim(c):
 		_toast("Contrato concluído! Recompensa coletada.")
+
+func _refresh_prestigio() -> void:
+	if not page_vbox.has("prestigio"):
+		return
+	var v: VBoxContainer = page_vbox["prestigio"]
+	_clear(v)
+
+	var head := _card(Style.C_MAGENTA, 4)
+	var hb := VBoxContainer.new()
+	hb.add_theme_constant_override("separation", 6)
+	head.add_child(hb)
+	var t := Label.new()
+	t.text = "%s — Prestígio %d" % [Prestige.title(), Prestige.count]
+	Style.use_display(t, 34)
+	t.add_theme_color_override("font_color", Style.C_MAGENTA)
+	hb.add_child(t)
+	hb.add_child(_kv("Pontos disponíveis", str(Prestige.pp), Style.C_GOLD))
+	hb.add_child(_kv("Total acumulado", str(Prestige.total_pp), Style.C_INK_SOFT))
+	v.add_child(head)
+
+	var bonus := _card()
+	var bb := VBoxContainer.new()
+	bb.add_theme_constant_override("separation", 4)
+	bonus.add_child(bb)
+	bb.add_child(_section_label("Bônus permanentes"))
+	bb.add_child(_kv("Renda dos postos", "+%d%%" % int(round((Prestige.income_mult() - 1.0) * 100.0)), Style.C_GREEN))
+	bb.add_child(_kv("Velocidade dos ciclos", "+%d%%" % int(round((Prestige.speed_mult() - 1.0) * 100.0)), Style.C_CYAN))
+	bb.add_child(_kv("Preço de venda", "+%d%%" % int(round((Prestige.sell_mult() - 1.0) * 100.0)), Style.C_ORANGE))
+	bb.add_child(_kv("Renda offline", "+%d%%" % int(round((Prestige.offline_mult() - 1.0) * 100.0)), Style.C_GREEN))
+	bb.add_child(_kv("Espólio mantido", "%d%%" % int(round(Prestige.keep_fraction() * 100.0)), Style.C_GOLD))
+	v.add_child(bonus)
+
+	var refound := _card(Style.C_MAGENTA, 3)
+	var rb := VBoxContainer.new()
+	rb.add_theme_constant_override("separation", 8)
+	refound.add_child(rb)
+	rb.add_child(_section_label("Refundar o Império"))
+	var explain := Label.new()
+	explain.text = "Recomeça do zero (postos, equipe, dinheiro), mas ganha Pontos de Prestígio para gastar em bônus permanentes. Coleção e gemas são mantidas."
+	explain.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	explain.add_theme_font_size_override("font_size", 23)
+	explain.add_theme_color_override("font_color", Style.C_INK_SOFT)
+	rb.add_child(explain)
+	var pbtn := Button.new()
+	if Prestige.can_prestige():
+		pbtn.text = "Refundar — ganhar %d Pontos" % Prestige.pp_gain(GameState.money)
+	else:
+		pbtn.text = "Precisa de R$ %s" % _fmt_money(Prestige.MIN_MONEY)
+	pbtn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(pbtn, Style.C_MAGENTA, Color.WHITE, 28, 108)
+	pbtn.disabled = not Prestige.can_prestige()
+	pbtn.pressed.connect(_confirm_prestige)
+	rb.add_child(pbtn)
+	v.add_child(refound)
+
+	v.add_child(_section_label("Talentos"))
+	for id in Prestige.ORDER:
+		var info: Dictionary = Prestige.TALENTS[id]
+		var card := _card()
+		var box := VBoxContainer.new()
+		box.add_theme_constant_override("separation", 6)
+		card.add_child(box)
+		var row := HBoxContainer.new()
+		var nm := Label.new()
+		nm.text = info.nome
+		Style.use_display(nm, 28)
+		nm.add_theme_color_override("font_color", Style.C_INK)
+		nm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(nm)
+		row.add_child(Style.chip("Nível %d" % Prestige.level(id), Style.C_BLUE))
+		box.add_child(row)
+		var d := Label.new()
+		d.text = info.desc
+		d.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		d.add_theme_font_size_override("font_size", 22)
+		d.add_theme_color_override("font_color", Style.C_INK_SOFT)
+		box.add_child(d)
+		var cost: int = Prestige.talent_cost(id)
+		var buy := Button.new()
+		buy.text = "Comprar — %d PP" % cost
+		buy.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_style_button(buy, Style.C_GREEN, Color.WHITE, 24, 86)
+		buy.disabled = not Prestige.can_buy(id)
+		buy.pressed.connect(_buy_talent.bind(id))
+		box.add_child(buy)
+		v.add_child(card)
+
+func _buy_talent(id: String) -> void:
+	if Prestige.buy_talent(id):
+		_toast("Talento aprimorado.")
+	else:
+		_toast("Pontos de Prestígio insuficientes.")
+
+func _confirm_prestige() -> void:
+	var parts := _modal_panel(Style.C_MAGENTA)
+	var dim: ColorRect = parts[0]
+	var box: VBoxContainer = parts[1]
+	var ti := Style.title("Refundar o Império?", 38, Style.C_INK)
+	ti.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(ti)
+	box.add_child(_centered_line("Você ganhará %d Pontos de Prestígio, mas recomeça do zero." % Prestige.pp_gain(GameState.money), 26, Style.C_INK_SOFT))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	box.add_child(row)
+	var cancel := Button.new()
+	cancel.text = "Cancelar"
+	cancel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(cancel, Style.C_NEUTRAL, Color.WHITE, 30, 100)
+	cancel.pressed.connect(dim.queue_free)
+	row.add_child(cancel)
+	var ok := Button.new()
+	ok.text = "Refundar"
+	ok.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(ok, Style.C_MAGENTA, Color.WHITE, 30, 100)
+	ok.pressed.connect(_do_prestige_now.bind(dim))
+	row.add_child(ok)
+
+func _do_prestige_now(dim: ColorRect) -> void:
+	if is_instance_valid(dim):
+		dim.queue_free()
+	Prestige.do_prestige()
+
+func _on_prestiged(pp_gained: int) -> void:
+	var parts := _modal_panel(Style.C_GOLD)
+	var dim: ColorRect = parts[0]
+	var box: VBoxContainer = parts[1]
+	var ti := Style.title("Império Refundado!", 42, Style.C_GOLD)
+	ti.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(ti)
+	box.add_child(_centered_line("Novo título: %s" % Prestige.title(), 28, Style.C_INK))
+	var big := Style.title("+%d Pontos de Prestígio" % pp_gained, 48, Style.C_MAGENTA)
+	big.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(big)
+	var btn := Button.new()
+	btn.text = "Continuar"
+	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(btn, Style.C_GREEN, Color.WHITE, 34, 108)
+	btn.pressed.connect(dim.queue_free)
+	box.add_child(btn)
+	_show_page("inicio")
 
 func _refresh_market() -> void:
 	var v: VBoxContainer = page_vbox["mercado"]
@@ -1070,7 +1218,7 @@ func _buy(product_id: String) -> void:
 func _sell(product_id: String) -> void:
 	if GameState.inventory.get(product_id, 0) <= 0:
 		return
-	var price: float = Economy.price_at(GameState.current_city_id, product_id) * Collection.global_sell_multiplier()
+	var price: float = Economy.price_at(GameState.current_city_id, product_id) * Collection.global_sell_multiplier() * Prestige.sell_mult()
 	GameState.remove_item(product_id, 1)
 	GameState.change_money(price)
 	GameState.emit_signal("item_sold", price)

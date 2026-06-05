@@ -45,6 +45,8 @@ func global_mult() -> float:
 	var m := 1.0
 	if has_node("/root/Employees"):
 		m *= Employees.global_income_multiplier()
+	if has_node("/root/Prestige"):
+		m *= Prestige.income_mult()
 	if boost_seconds_left > 0.0:
 		m *= 2.0
 	return m
@@ -57,7 +59,8 @@ func cycle_time(city_id: String) -> float:
 
 	var p: Dictionary = posts[city_id]
 	var speed: float = 1.0 + 0.04 * floorf(float(p.nivel) / 25.0)
-	return float(CYCLE_TIME[city_id]) / minf(speed, 1.66)
+	var prestige_speed: float = Prestige.speed_mult() if has_node("/root/Prestige") else 1.0
+	return float(CYCLE_TIME[city_id]) / minf(speed, 1.66) / prestige_speed
 
 func upgrade_cost(city_id: String) -> float:
 	var p: Dictionary = posts[city_id]
@@ -128,6 +131,15 @@ func buy_manager(city_id: String) -> bool:
 	p.manager = true
 	emit_signal("posts_changed")
 	return true
+
+func reset() -> void:
+	boost_seconds_left = 0.0
+	for city_id in ORDER:
+		posts[city_id].nivel = 1
+		posts[city_id].manager = false
+		posts[city_id].progress = 0.0
+		posts[city_id].unlocked = city_id == "rural"
+	emit_signal("posts_changed")
 
 const BOOST_GEM_COST := 5
 const BOOST_DURATION := 300.0
