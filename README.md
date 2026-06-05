@@ -1,3 +1,19 @@
+<p align="center">
+  <img src="LogoApp.png" width="300">
+</p>
+
+<h1 align="center">Mercado Paralelo</h1>
+
+<p align="center">
+  📈 Economia dinâmica • 🚚 Logística • 💰 Comércio • 🏆 Progressão infinita
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Status-Em%20Desenvolvimento-orange">
+  <img src="https://img.shields.io/badge/Engine-Unity-blue">
+  <img src="https://img.shields.io/badge/Platform-Android%20%7C%20iOS-green">
+</p>
+
 # Mercado Negro
 
 Um jogo mobile 2D de simulação econômica, gerenciamento e estratégia, onde o jogador começa com poucos recursos e constrói um império comercial através da compra, venda e negociação de produtos em mercados dinâmicos.
