@@ -58,12 +58,14 @@ func _ready() -> void:
 	Contracts.contracts_changed.connect(_refresh_contratos)
 	Prestige.prestige_changed.connect(_refresh_prestigio)
 	Prestige.prestiged.connect(_on_prestiged)
+	DailyRewards.daily_changed.connect(_refresh_mais)
 	_on_money_changed(GameState.money)
 	_on_gems_changed(GameState.gems)
 	_on_city_changed(GameState.current_city_id)
 	_toast("Toque num posto cheio para coletar. Melhore para crescer!")
 	set_process(true)
 	_maybe_welcome()
+	_maybe_daily()
 
 func _process(_delta: float) -> void:
 	if current_page != "inicio":
@@ -595,6 +597,13 @@ func _refresh_mais() -> void:
 	var prest_label: String = "Prestígio"
 	if Prestige.can_prestige():
 		prest_label = "Prestígio  (+%d disponível!)" % Prestige.pp_gain(GameState.money)
+	var daily_hot: bool = DailyRewards.can_claim()
+	var daily_label: String = "Recompensa diária  (pronta!)" if daily_hot else "Recompensa diária"
+	var diario := Button.new()
+	diario.text = daily_label
+	_style_button(diario, Style.C_GOLD if daily_hot else Style.C_CARD_ALT, Style.C_BG if daily_hot else Style.C_INK, 30, 104)
+	diario.pressed.connect(_show_daily)
+	v.add_child(diario)
 	var items := [
 		{ "id": "prestigio", "label": prest_label, "hot": Prestige.can_prestige() },
 		{ "id": "contratos", "label": contratos_label, "hot": done > 0 },
@@ -1257,6 +1266,47 @@ func _maybe_welcome() -> void:
 	var r: Dictionary = SaveSystem.pending_report
 	SaveSystem.pending_report = {}
 	_show_welcome(r)
+
+func _maybe_daily() -> void:
+	if not DailyRewards.can_claim():
+		return
+	if overlay.get_child_count() > 0:
+		return
+	_show_daily()
+
+func _show_daily() -> void:
+	if not DailyRewards.can_claim():
+		_toast("Você já coletou a recompensa de hoje. Volte amanhã!")
+		return
+	var parts := _modal_panel(Style.C_GOLD)
+	var dim: ColorRect = parts[0]
+	var box: VBoxContainer = parts[1]
+	var ti := Style.title("Recompensa Diária", 40, Style.C_GOLD)
+	ti.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(ti)
+	var track := HBoxContainer.new()
+	track.alignment = BoxContainer.ALIGNMENT_CENTER
+	track.add_theme_constant_override("separation", 6)
+	box.add_child(track)
+	for i in DailyRewards.REWARDS.size():
+		var active: bool = i == DailyRewards.current_index()
+		track.add_child(Style.chip("D%d" % (i + 1), Style.C_GOLD if active else Style.C_CARD_ALT, Style.C_BG if active else Style.C_INK_SOFT))
+	box.add_child(_centered_line("Recompensa de hoje:", 26, Style.C_INK_SOFT))
+	var rew := Style.title(DailyRewards.reward_text(DailyRewards.current()), 38, Style.C_GREEN)
+	rew.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(rew)
+	var btn := Button.new()
+	btn.text = "Coletar"
+	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(btn, Style.C_GREEN, Color.WHITE, 34, 108)
+	btn.pressed.connect(_claim_daily.bind(dim))
+	box.add_child(btn)
+
+func _claim_daily(dim: ColorRect) -> void:
+	DailyRewards.claim()
+	if is_instance_valid(dim):
+		dim.queue_free()
+	_toast("Recompensa diária coletada!")
 
 func _modal_panel(border_col: Color) -> Array:
 
