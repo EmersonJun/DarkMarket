@@ -18,8 +18,16 @@ func _ready() -> void:
 	refresh_candidates(4)
 	Economy.market_tick.connect(func(): add_work_xp(10.0))
 
-func global_income_multiplier() -> float:
-	return 1.0 + total_income_per_hour() / 2000.0
+func income_per_second() -> float:
+	return maxf(0.0, net_income_per_hour()) / 3600.0
+
+func _process(delta: float) -> void:
+	var ips := income_per_second()
+	if ips <= 0.0:
+		return
+	var m := Prestige.income_mult() if has_node("/root/Prestige") else 1.0
+	GameState.money += ips * m * delta
+	GameState.emit_signal("money_changed", GameState.money)
 
 func _roll_attr(mult: float) -> int:
 	return clampi(int(randf_range(10.0, 40.0) * mult), 1, 100)

@@ -43,8 +43,6 @@ func _process(delta: float) -> void:
 
 func global_mult() -> float:
 	var m := 1.0
-	if has_node("/root/Employees"):
-		m *= Employees.global_income_multiplier()
 	if has_node("/root/Prestige"):
 		m *= Prestige.income_mult()
 	if boost_seconds_left > 0.0:
@@ -143,6 +141,10 @@ func reset() -> void:
 
 const BOOST_GEM_COST := 5
 const BOOST_DURATION := 300.0
+
+func grant_boost() -> void:
+	boost_seconds_left = BOOST_DURATION
+	emit_signal("posts_changed")
 
 func can_boost() -> bool:
 	return GameState.gems >= BOOST_GEM_COST and boost_seconds_left <= 0.0

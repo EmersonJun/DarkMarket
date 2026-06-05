@@ -26,6 +26,7 @@ func _ready() -> void:
 	Posts.posts_changed.connect(_request_save)
 	Contracts.contracts_changed.connect(_request_save)
 	Prestige.prestige_changed.connect(_request_save)
+	DailyRewards.daily_changed.connect(_request_save)
 	get_window().close_requested.connect(_on_close_requested)
 
 	var periodic := Timer.new()
@@ -65,6 +66,7 @@ func save_game() -> void:
 		"posts": Posts.serialize(),
 		"contracts": Contracts.serialize(),
 		"prestige": Prestige.serialize(),
+		"daily": DailyRewards.serialize(),
 	}
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f == null:
@@ -127,6 +129,9 @@ func load_game() -> void:
 	if data.has("prestige"):
 		Prestige.deserialize(data.get("prestige", {}))
 
+	if data.has("daily"):
+		DailyRewards.deserialize(data.get("daily", {}))
+
 	_compute_idle(float(data.get("last_played", Time.get_unix_time_from_system())))
 
 func _compute_idle(last_played: float) -> void:
@@ -137,6 +142,7 @@ func _compute_idle(last_played: float) -> void:
 	var eff: float = minf(elapsed, cap_seconds)
 
 	var income: float = Posts.auto_income_per_second() * eff * Prestige.offline_mult()
+	income += Employees.income_per_second() * eff * Prestige.income_mult() * Prestige.offline_mult()
 
 	var ticks: int = clampi(int(eff / SECONDS_PER_TICK), 0, MAX_OFFLINE_TICKS)
 	for i in ticks:

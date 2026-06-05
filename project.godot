@@ -30,6 +30,7 @@ Prestige="*res://scripts/Prestige.gd"
 Posts="*res://scripts/Posts.gd"
 Contracts="*res://scripts/Contracts.gd"
 Collection="*res://scripts/Collection.gd"
+DailyRewards="*res://scripts/DailyRewards.gd"
 SaveSystem="*res://scripts/SaveSystem.gd"
 
 [display]
