@@ -25,6 +25,10 @@ var response_lbl: Label
 var propose_btn: Button
 var accept_counter_btn: Button
 var pressure_btn: Button
+var avatar_panel: PanelContainer
+var mood_chip: Label
+var bubble_sb: StyleBoxFlat
+var mood: String = "neutro"
 
 func configure(p_npc_id: String) -> void:
 	npc_id = p_npc_id
@@ -56,6 +60,65 @@ func _style_button(btn: Button, fill: Color, font_size: int = 32, min_h: int = 1
 	Style.style_candy(btn, fill, fill.darkened(0.22), Color.WHITE, font_size, min_h)
 	Style.bounce(btn)
 
+func _ring_style(color: Color, size: int) -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Style.C_CARD_ALT
+	sb.set_corner_radius_all(int(size / 2))
+	sb.set_border_width_all(3)
+	sb.border_color = color
+	Style.neon(sb, color, 8, 0.45)
+	sb.content_margin_left = 6
+	sb.content_margin_right = 6
+	sb.content_margin_top = 6
+	sb.content_margin_bottom = 6
+	return sb
+
+func _mood_color(m: String) -> Color:
+	match m:
+		"satisfeito": return Style.C_GREEN
+		"pensando": return Style.C_GOLD
+		"irritado": return Style.C_RED
+	return Style.C_CYAN
+
+func _mood_label(m: String) -> String:
+	match m:
+		"satisfeito": return "Satisfeito"
+		"pensando": return "Pensando"
+		"irritado": return "Irritado"
+	return "Neutro"
+
+func _set_mood(m: String) -> void:
+	mood = m
+	var col := _mood_color(m)
+	if is_instance_valid(avatar_panel):
+		avatar_panel.add_theme_stylebox_override("panel", _ring_style(col, 132))
+	if is_instance_valid(mood_chip):
+		mood_chip.text = _mood_label(m)
+		mood_chip.add_theme_color_override("font_color", Style.C_BG)
+		var csb := Style.sb_flat(col, 18)
+		csb.content_margin_left = 16
+		csb.content_margin_right = 16
+		csb.content_margin_top = 6
+		csb.content_margin_bottom = 6
+		mood_chip.add_theme_stylebox_override("normal", csb)
+	if bubble_sb:
+		bubble_sb.border_color = col
+		Style.neon(bubble_sb, col, 8, 0.3)
+	if m == "irritado":
+		_shake(avatar_panel)
+	else:
+		Style.pop(avatar_panel)
+
+func _shake(node: Control) -> void:
+	if not is_instance_valid(node):
+		return
+	node.pivot_offset = node.size * 0.5
+	var tw := node.create_tween()
+	tw.tween_property(node, "rotation_degrees", -8.0, 0.05)
+	tw.tween_property(node, "rotation_degrees", 8.0, 0.08)
+	tw.tween_property(node, "rotation_degrees", -5.0, 0.08)
+	tw.tween_property(node, "rotation_degrees", 0.0, 0.06)
+
 func _build_ui() -> void:
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 16)
@@ -67,7 +130,17 @@ func _build_ui() -> void:
 	head.add_theme_constant_override("separation", 16)
 	head.alignment = BoxContainer.ALIGNMENT_CENTER
 	box.add_child(head)
-	head.add_child(Style.avatar_badge(Style.npc_face_path(npc.arquetipo), Style.ring_color(npc_id), 132))
+	avatar_panel = PanelContainer.new()
+	avatar_panel.custom_minimum_size = Vector2(132, 132)
+	avatar_panel.add_theme_stylebox_override("panel", _ring_style(Style.C_CYAN, 132))
+	var face := TextureRect.new()
+	var fp := Style.npc_face_path(npc.arquetipo)
+	if ResourceLoader.exists(fp):
+		face.texture = load(fp)
+	face.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	face.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	avatar_panel.add_child(face)
+	head.add_child(avatar_panel)
 	var headinfo := VBoxContainer.new()
 	headinfo.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	headinfo.add_theme_constant_override("separation", 4)
@@ -79,11 +152,16 @@ func _build_ui() -> void:
 	title_lbl.add_theme_color_override("font_color", COL_TEXT)
 	headinfo.add_child(title_lbl)
 
+	var archrow := HBoxContainer.new()
+	archrow.add_theme_constant_override("separation", 8)
+	headinfo.add_child(archrow)
 	var arch := Label.new()
 	arch.text = npc.arquetipo
 	arch.add_theme_font_size_override("font_size", 24)
 	arch.add_theme_color_override("font_color", Style.C_CYAN)
-	headinfo.add_child(arch)
+	archrow.add_child(arch)
+	mood_chip = Style.chip("Neutro", Style.C_CYAN, Style.C_BG)
+	archrow.add_child(mood_chip)
 
 	var spec := Label.new()
 	spec.text = NPCs.specialty(npc_id)
@@ -144,14 +222,14 @@ func _build_ui() -> void:
 	tail.add_child(poly)
 	bubble_wrap.add_child(tail)
 	var bubble := PanelContainer.new()
-	var bsb := Style.sb_flat(Style.C_CARD_ALT, 22)
-	bsb.set_border_width_all(2)
-	bsb.border_color = Style.C_CYAN
-	bsb.content_margin_left = 22
-	bsb.content_margin_right = 22
-	bsb.content_margin_top = 16
-	bsb.content_margin_bottom = 16
-	bubble.add_theme_stylebox_override("panel", bsb)
+	bubble_sb = Style.sb_flat(Style.C_CARD_ALT, 22)
+	bubble_sb.set_border_width_all(2)
+	bubble_sb.border_color = Style.C_CYAN
+	bubble_sb.content_margin_left = 22
+	bubble_sb.content_margin_right = 22
+	bubble_sb.content_margin_top = 16
+	bubble_sb.content_margin_bottom = 16
+	bubble.add_theme_stylebox_override("panel", bubble_sb)
 	bubble_wrap.add_child(bubble)
 	response_lbl = Label.new()
 	response_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -237,8 +315,9 @@ func _on_product_selected(index: int) -> void:
 	ask_slider.step = max(0.01, snapped(market * 0.01, 0.01))
 	ask_slider.value = market
 	_on_slider_changed(market)
-	response_lbl.text = ""
+	response_lbl.text = "..."
 	_hide_counter()
+	_set_mood("neutro")
 
 func _on_slider_changed(v: float) -> void:
 	var market: float = Economy.price_at(GameState.current_city_id, product_id)
@@ -252,16 +331,20 @@ func _on_propose() -> void:
 	var res: Dictionary = NPCs.evaluate_offer(npc_id, product_id, asking)
 	match res.result:
 		"accept":
+			_set_mood("satisfeito")
 			_finalize(asking, 2, "%s topou! \"Fechado por R$ %.2f.\"" % [NPCs.NPCS[npc_id].nome, asking])
 		"counter":
 			counter_price = res.counter_price
 			response_lbl.text = "%s contrapropõe: \"Te pago R$ %.2f, no máximo.\"" % [NPCs.NPCS[npc_id].nome, counter_price]
+			_set_mood("pensando")
 			_show_counter()
 		"refuse":
 			response_lbl.text = "%s recusa: \"Caro demais pra mim.\"" % NPCs.NPCS[npc_id].nome
+			_set_mood("irritado")
 			_hide_counter()
 
 func _on_accept_counter() -> void:
+	_set_mood("satisfeito")
 	_finalize(counter_price, 1, "Negócio fechado por R$ %.2f." % counter_price)
 
 func _on_pressure() -> void:
@@ -271,6 +354,7 @@ func _on_pressure() -> void:
 	NPCs.add_affinity(npc_id, -3)
 	pressure_btn.disabled = true
 	var asking: float = ask_slider.value
+	_set_mood("irritado")
 	if randf() < 0.5:
 		_finalize(asking, 0, "Sob pressão, %s cede: \"Tá bom, R$ %.2f... mas não abuse.\"" % [NPCs.NPCS[npc_id].nome, asking])
 	else:
