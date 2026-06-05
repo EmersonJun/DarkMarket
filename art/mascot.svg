@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 420" width="400" height="420">
+  <!-- Zeca, o Guaxinim (versão noturna) -->
+  <g stroke="#0c0a14" stroke-width="9" stroke-linejoin="round" stroke-linecap="round">
+    <!-- Orelhas -->
+    <ellipse cx="118" cy="118" rx="44" ry="50" fill="#5a5470"/>
+    <ellipse cx="282" cy="118" rx="44" ry="50" fill="#5a5470"/>
+    <ellipse cx="120" cy="124" rx="20" ry="26" fill="#322d45" stroke="none"/>
+    <ellipse cx="280" cy="124" rx="20" ry="26" fill="#322d45" stroke="none"/>
+    <!-- Cabeça -->
+    <ellipse cx="200" cy="220" rx="152" ry="142" fill="#5a5470"/>
+    <!-- Máscara de guaxinim -->
+    <path d="M150 165 q50 -26 100 0 q24 14 18 44 q-8 40 -68 40 q-60 0 -68 -40 q-6 -30 18 -44 z" fill="#14121e" stroke="none"/>
+    <!-- Sobrancelhas claras -->
+    <ellipse cx="150" cy="158" rx="34" ry="16" fill="#8a82a8" stroke="none"/>
+    <ellipse cx="250" cy="158" rx="34" ry="16" fill="#8a82a8" stroke="none"/>
+    <!-- Olhos brilhando (ciano) -->
+    <ellipse cx="156" cy="205" rx="25" ry="29" fill="#0c1a1e"/>
+    <ellipse cx="244" cy="205" rx="25" ry="29" fill="#0c1a1e"/>
+    <circle cx="158" cy="206" r="15" fill="#19e0c8" stroke="none"/>
+    <circle cx="242" cy="206" r="15" fill="#19e0c8" stroke="none"/>
+    <circle cx="163" cy="201" r="5" fill="#d6fff7" stroke="none"/>
+    <circle cx="247" cy="201" r="5" fill="#d6fff7" stroke="none"/>
+    <!-- Focinho -->
+    <ellipse cx="200" cy="278" rx="68" ry="58" fill="#d9d3e8"/>
+    <!-- Nariz -->
+    <ellipse cx="200" cy="256" rx="19" ry="14" fill="#14121e" stroke="none"/>
+    <!-- Boca -->
+    <path d="M200 270 Q200 292 176 296 M200 270 Q200 292 224 296" fill="none" stroke-width="7"/>
+  </g>
+  <!-- Cachecol (magenta neon) -->
+  <path d="M96 332 q104 64 208 0 l14 30 q-118 70 -236 0 z" fill="#ff3dae" stroke="#0c0a14" stroke-width="9" stroke-linejoin="round"/>
+  <path d="M270 352 l40 8 -8 44 -34 -16 z" fill="#ff3dae" stroke="#0c0a14" stroke-width="9" stroke-linejoin="round"/>
+  <!-- Moeda -->
+  <g stroke="#0c0a14" stroke-width="9" stroke-linejoin="round">
+    <circle cx="318" cy="300" r="58" fill="#ffd24a"/>
+    <circle cx="318" cy="300" r="42" fill="none" stroke="#d9a93a" stroke-width="7"/>
+  </g>
+  <path d="M318 270 v60 M333 282 q-15 -10 -27 0 q-10 9 6 14 q16 5 6 14 q-12 10 -28 0" fill="none" stroke="#8a6a1e" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="300" cy="286" r="6" fill="#fff4cf" stroke="none"/>
+</svg>

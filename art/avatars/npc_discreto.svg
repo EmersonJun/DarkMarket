@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <g stroke="#14121e" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
+    <!-- cabelo atrás -->
+    <path d="M16 56 q0 -38 34 -40 q34 2 34 40 q0 22 -10 30 q4 -30 -24 -32 q-28 2 -24 32 q-10 -8 -10 -30 z" fill="#1f1b2a"/>
+    <ellipse cx="50" cy="58" rx="27" ry="30" fill="#e0b48c"/>
+    <!-- franja -->
+    <path d="M24 46 q26 -20 52 0 q-8 -10 -26 -10 q-18 0 -26 10 z" fill="#1f1b2a"/>
+    <!-- brincos -->
+    <circle cx="23" cy="66" r="4" fill="#ffd24a"/>
+    <circle cx="77" cy="66" r="4" fill="#ffd24a"/>
+    <circle cx="40" cy="56" r="4.5" fill="#ffffff" stroke="none"/>
+    <circle cx="60" cy="56" r="4.5" fill="#ffffff" stroke="none"/>
+    <circle cx="40" cy="57" r="2.2" fill="#14121e" stroke="none"/>
+    <circle cx="60" cy="57" r="2.2" fill="#14121e" stroke="none"/>
+    <path d="M50 60 v6" fill="none" stroke-width="2.5"/>
+    <path d="M44 73 q6 5 12 0" fill="none" stroke="#c0392b" stroke-width="4"/>
+  </g>
+</svg>
