@@ -281,7 +281,7 @@ func _finalize(price: float, affinity_delta: int, msg: String) -> void:
 	if GameState.inventory.get(product_id, 0) <= 0:
 		return
 	GameState.remove_item(product_id, 1)
-	var final_price: float = price * Collection.global_sell_multiplier()
+	var final_price: float = price * Collection.global_sell_multiplier() * Prestige.sell_mult()
 	GameState.change_money(final_price)
 	GameState.emit_signal("item_sold", final_price)
 	if affinity_delta != 0:

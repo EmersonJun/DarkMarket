@@ -105,6 +105,12 @@ func claim(c: Dictionary) -> bool:
 	emit_signal("contracts_changed")
 	return true
 
+func reset() -> void:
+	active.clear()
+	for i in SLOTS:
+		active.append(_new_contract())
+	emit_signal("contracts_changed")
+
 func serialize() -> Dictionary:
 	return { "active": active.duplicate(true), "next_id": _next_id }
 

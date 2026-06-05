@@ -130,6 +130,10 @@ func fire(emp: Dictionary) -> void:
 	hired.erase(emp)
 	emit_signal("roster_changed")
 
+func reset() -> void:
+	hired.clear()
+	refresh_candidates(4)
+
 func train(emp: Dictionary) -> bool:
 	var cost: float = train_cost(emp)
 	if GameState.money < cost:
