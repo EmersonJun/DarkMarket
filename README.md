@@ -1,4 +1,4 @@
-# Mercado Paralelo
+# Mercado Negro
 
 Um jogo mobile 2D de simulação econômica, gerenciamento e estratégia, onde o jogador começa com poucos recursos e constrói um império comercial através da compra, venda e negociação de produtos em mercados dinâmicos.
 
