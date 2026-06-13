@@ -14,13 +14,14 @@ config/name="Mercado Negro"
 config/description="Trading tycoon vertical slice — see ../GDD_Mercado_Paralelo.md"
 run/main_scene="res://scenes/Title.tscn"
 config/features=PackedStringArray("4.6", "Mobile")
-boot_splash/bg_color=Color(0.424, 0.776, 1, 1)
+boot_splash/bg_color=Color(0.055, 0.043, 0.094, 1)
 boot_splash/show_image=false
 config/icon="res://art/icon.svg"
 
 [autoload]
 
 Style="*res://ui/Style.gd"
+Audio="*res://scripts/Audio.gd"
 GameState="*res://scripts/GameState.gd"
 Economy="*res://scripts/Economy.gd"
 News="*res://scripts/News.gd"

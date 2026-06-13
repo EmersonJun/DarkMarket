@@ -8,7 +8,7 @@ var NAV := [
 	{ "id": "colecao", "label": "Coleção" },
 	{ "id": "mais", "label": "Mais" },
 ]
-var EXTRA_PAGES := ["contratos", "prestigio", "mochila", "noticias", "viajar"]
+var EXTRA_PAGES := ["contratos", "prestigio", "mochila", "noticias", "viajar", "estatisticas"]
 
 var COL_BG: Color
 var COL_CARD: Color
@@ -23,14 +23,27 @@ var bg_gradient: Gradient
 var money_label: Label
 var rate_label: Label
 var gems_label: Label
+var coin_icon: TextureRect
+var gem_icon: TextureRect
+var display_money: float = 0.0
+var prestige_bar: ProgressBar
+var prestige_strip_lbl: Label
 var pages_holder: Control
 var pages := {}
 var page_vbox := {}
 var nav_buttons := {}
+var nav_icons := {}
+var nav_labels := {}
+var nav_badges := {}
 var current_page: String = "inicio"
 var toast_label: Label
 var overlay: Control
 var post_widgets := {}
+var mascot: TextureRect
+var mascot_wrap: Control
+var _mascot_time: float = 0.0
+var _mascot_busy: bool = false
+var market_filter: String = "Tudo"
 
 func _ready() -> void:
 	COL_BG = Style.C_BG
@@ -59,6 +72,11 @@ func _ready() -> void:
 	Prestige.prestige_changed.connect(_refresh_prestigio)
 	Prestige.prestiged.connect(_on_prestiged)
 	DailyRewards.daily_changed.connect(_refresh_mais)
+	GameState.item_sold.connect(_on_item_sold)
+	GameState.stats_changed.connect(_on_stats_changed)
+	Posts.milestone_reached.connect(_on_milestone)
+	Posts.unlocked.connect(_on_unlocked)
+	display_money = GameState.money
 	_on_money_changed(GameState.money)
 	_on_gems_changed(GameState.gems)
 	_on_city_changed(GameState.current_city_id)
@@ -67,7 +85,20 @@ func _ready() -> void:
 	_maybe_welcome()
 	_maybe_daily()
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	# Header sempre visivel: count-up suave do dinheiro, taxa, faixa de prestigio.
+	if money_label:
+		var target := GameState.money
+		display_money = lerp(display_money, target, clampf(delta * 9.0, 0.0, 1.0))
+		if absf(display_money - target) < 0.5:
+			display_money = target
+		money_label.text = "R$ %s" % _fmt_money(display_money)
+	if rate_label:
+		rate_label.text = "R$ %s/s" % _fmt_money(Posts.auto_income_per_second() + Employees.income_per_second())
+	_update_prestige_strip()
+	_animate_mascot(delta)
+	_update_nav_badges()
+
 	if current_page != "inicio":
 		return
 
@@ -84,17 +115,20 @@ func _process(_delta: float) -> void:
 			w.ready_lbl.visible = ready
 			if ready:
 				w.ready_lbl.modulate.a = pulse
-		if is_instance_valid(w.cart) and is_instance_valid(w.prog):
-			var pw: float = w.prog.size.x
-			w.cart.position = Vector2((pw - 64.0) * float(p.progress), (w.prog.size.y - 64.0) * 0.5)
+		if is_instance_valid(w.cart) and is_instance_valid(w.bar):
+			var road: Control = w.bar
+			var cx: float = road.position.x + (road.size.x - 64.0) * float(p.progress)
+			var cy: float = road.position.y + road.size.y * 0.5 - 32.0
+			# Carrinho roda/sacode mais devagar nas cidades distantes (ciclo maior).
+			var ct: float = Posts.cycle_time(city_id)
+			var bob: float = sin(t * (6.0 / maxf(ct, 1.0))) * 4.0
+			w.cart.position = Vector2(cx, cy + bob)
 		if w.has("up_btn") and is_instance_valid(w.up_btn):
 			w.up_btn.disabled = money < float(w.up_cost)
 		if w.has("mg_btn") and is_instance_valid(w.mg_btn):
 			w.mg_btn.disabled = money < float(w.mg_cost)
 		if w.has("unlock_btn") and is_instance_valid(w.unlock_btn):
 			w.unlock_btn.disabled = money < float(w.unlock_cost)
-	if rate_label:
-		rate_label.text = "R$ %s/s" % _fmt_money(Posts.auto_income_per_second())
 
 func _setup_window() -> void:
 	var win := get_window()
@@ -155,6 +189,7 @@ func _build_ui() -> void:
 	bg_tex.set_anchors_preset(Control.PRESET_FULL_RECT)
 	bg_tex.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(bg_tex)
+	_build_background_fx()
 	add_child(Style.make_vignette())
 
 	var screen := VBoxContainer.new()
@@ -163,6 +198,7 @@ func _build_ui() -> void:
 	add_child(screen)
 
 	screen.add_child(_build_header())
+	screen.add_child(_build_prestige_strip())
 
 	var content_margin := MarginContainer.new()
 	content_margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -184,7 +220,112 @@ func _build_ui() -> void:
 
 	screen.add_child(_build_toast())
 	screen.add_child(_build_bottom_nav())
+	_build_mascot()
 	_show_page("inicio")
+
+func _build_background_fx() -> void:
+	# Glow dourado de "lampiao" + fagulhas subindo (vida de feira noturna).
+	var glow := Style.make_lamp_glow(Style.C_LAMP, 0.16)
+	glow.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(glow)
+
+	var dot := Gradient.new()
+	dot.set_color(0, Color(Style.C_LAMP.r, Style.C_LAMP.g, Style.C_LAMP.b, 0.9))
+	dot.set_color(1, Color(Style.C_LAMP.r, Style.C_LAMP.g, Style.C_LAMP.b, 0.0))
+	var dtex := GradientTexture2D.new()
+	dtex.gradient = dot
+	dtex.fill = GradientTexture2D.FILL_RADIAL
+	dtex.fill_from = Vector2(0.5, 0.5)
+	dtex.fill_to = Vector2(1.0, 0.5)
+	dtex.width = 24
+	dtex.height = 24
+
+	var emitter := CPUParticles2D.new()
+	emitter.texture = dtex
+	emitter.amount = 22
+	emitter.lifetime = 7.0
+	emitter.preprocess = 4.0
+	emitter.position = Vector2(540, 2000)
+	emitter.emission_shape = CPUParticles2D.EMISSION_SHAPE_RECTANGLE
+	emitter.emission_rect_extents = Vector2(560, 30)
+	emitter.direction = Vector2(0, -1)
+	emitter.spread = 18.0
+	emitter.gravity = Vector2(0, -22)
+	emitter.initial_velocity_min = 24.0
+	emitter.initial_velocity_max = 64.0
+	emitter.scale_amount_min = 0.4
+	emitter.scale_amount_max = 1.1
+	var ramp := Gradient.new()
+	ramp.set_color(0, Color(1, 1, 1, 0.0))
+	ramp.set_color(1, Color(1, 1, 1, 0.0))
+	ramp.add_point(0.5, Color(1, 1, 1, 0.5))
+	emitter.color_ramp = ramp
+	emitter.z_index = -1
+	add_child(emitter)
+
+func _build_prestige_strip() -> Control:
+	var m := MarginContainer.new()
+	m.add_theme_constant_override("margin_left", 28)
+	m.add_theme_constant_override("margin_right", 28)
+	m.add_theme_constant_override("margin_top", 0)
+	m.add_theme_constant_override("margin_bottom", 6)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	m.add_child(row)
+	prestige_strip_lbl = Label.new()
+	prestige_strip_lbl.text = "Próx. Prestígio"
+	Style.use_display(prestige_strip_lbl, 18)
+	prestige_strip_lbl.add_theme_color_override("font_color", Style.C_INK_SOFT)
+	row.add_child(prestige_strip_lbl)
+	prestige_bar = Style.progress(0, 100, Style.C_MAGENTA)
+	prestige_bar.custom_minimum_size = Vector2(0, 16)
+	prestige_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	prestige_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(prestige_bar)
+	return m
+
+func _build_mascot() -> void:
+	mascot_wrap = Control.new()
+	mascot_wrap.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	mascot_wrap.offset_left = -178
+	mascot_wrap.offset_top = -340
+	mascot_wrap.offset_right = -18
+	mascot_wrap.offset_bottom = -180
+	mascot_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(mascot_wrap)
+	mascot = _icon("res://art/mascot.svg", 150)
+	mascot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	mascot.modulate.a = 0.97
+	mascot_wrap.add_child(mascot)
+
+func _animate_mascot(delta: float) -> void:
+	if not is_instance_valid(mascot):
+		return
+	_mascot_time += delta
+	if not _mascot_busy:
+		var amp := 14.0 if _any_post_ready() else 7.0
+		mascot.position.y = sin(_mascot_time * 2.2) * amp
+		mascot.rotation_degrees = sin(_mascot_time * 1.3) * 3.0
+
+func _any_post_ready() -> bool:
+	for city_id in Posts.ORDER:
+		if Posts.is_ready(city_id):
+			return true
+	return false
+
+func _mascot_react(_kind: String = "celebrate") -> void:
+	if not is_instance_valid(mascot_wrap) or not is_instance_valid(mascot):
+		return
+	_mascot_busy = true
+	mascot.rotation_degrees = 0.0
+	Style.pop(mascot_wrap, 1.3)
+	var tw := mascot.create_tween()
+	tw.tween_property(mascot, "position:y", -46.0, 0.18).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_property(mascot, "position:y", 0.0, 0.34).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
+	tw.tween_callback(_mascot_done)
+
+func _mascot_done() -> void:
+	_mascot_busy = false
 
 func _build_header() -> Control:
 	var header := MarginContainer.new()
@@ -208,7 +349,8 @@ func _build_header() -> Control:
 	var mh := HBoxContainer.new()
 	mh.add_theme_constant_override("separation", 10)
 	money_pill.add_child(mh)
-	mh.add_child(_icon("res://art/ui/coin.svg", 58))
+	coin_icon = _icon("res://art/ui/coin.svg", 58)
+	mh.add_child(coin_icon)
 	var mv := VBoxContainer.new()
 	mv.add_theme_constant_override("separation", 0)
 	mh.add_child(mv)
@@ -233,12 +375,19 @@ func _build_header() -> Control:
 	var gh := HBoxContainer.new()
 	gh.add_theme_constant_override("separation", 8)
 	gem_pill.add_child(gh)
-	gh.add_child(_icon("res://art/ui/gem.svg", 52))
+	gem_icon = _icon("res://art/ui/gem.svg", 52)
+	gh.add_child(gem_icon)
 	gems_label = Label.new()
 	gems_label.text = "0"
 	Style.use_display(gems_label, 36)
 	gems_label.add_theme_color_override("font_color", Style.C_INK)
 	gh.add_child(gems_label)
+	var gem_plus := Button.new()
+	gem_plus.text = "+"
+	gem_plus.custom_minimum_size = Vector2(58, 58)
+	_style_button(gem_plus, Style.C_GOLD, Style.C_BG, 36, 58)
+	gem_plus.pressed.connect(_show_gem_shop)
+	gh.add_child(gem_plus)
 	row.add_child(gem_pill)
 	return header
 
@@ -290,24 +439,62 @@ func _build_bottom_nav() -> PanelContainer:
 	hb.add_theme_constant_override("separation", 4)
 	nav.add_child(hb)
 	for entry in NAV:
-		var btn := Button.new()
-		btn.text = entry.label
-		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		btn.toggle_mode = true
-		_style_nav_button(btn, entry.id == current_page)
-		btn.pressed.connect(_show_page.bind(entry.id))
-		hb.add_child(btn)
-		nav_buttons[entry.id] = btn
+		hb.add_child(_make_nav_item(entry))
 	return nav
 
-func _style_nav_button(btn: Button, active: bool) -> void:
-	btn.custom_minimum_size = Vector2(0, 120)
-	Style.use_display(btn, 20)
-	btn.clip_text = true
-	var fg := Style.C_BG if active else Style.C_INK_SOFT
-	btn.add_theme_color_override("font_color", fg)
-	btn.add_theme_color_override("font_hover_color", Style.C_INK)
-	btn.add_theme_color_override("font_pressed_color", fg)
+func _make_nav_item(entry: Dictionary) -> Control:
+	var holder := Control.new()
+	holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	holder.custom_minimum_size = Vector2(0, 124)
+	var btn := Button.new()
+	btn.toggle_mode = true
+	btn.focus_mode = Control.FOCUS_NONE
+	btn.set_anchors_preset(Control.PRESET_FULL_RECT)
+	btn.pressed.connect(_show_page.bind(entry.id))
+	holder.add_child(btn)
+	nav_buttons[entry.id] = btn
+
+	var vb := VBoxContainer.new()
+	vb.set_anchors_preset(Control.PRESET_FULL_RECT)
+	vb.alignment = BoxContainer.ALIGNMENT_CENTER
+	vb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.add_child(vb)
+	var icon := _icon("res://art/ui/nav_%s.svg" % entry.id, 60)
+	icon.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vb.add_child(icon)
+	nav_icons[entry.id] = icon
+
+	var badge := _make_badge()
+	badge.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	badge.offset_left = -34
+	badge.offset_top = 14
+	badge.offset_right = -10
+	badge.offset_bottom = 38
+	holder.add_child(badge)
+	nav_badges[entry.id] = badge
+
+	_style_nav_item(entry.id, entry.id == current_page)
+	return holder
+
+func _make_badge() -> Control:
+	var b := Panel.new()
+	b.custom_minimum_size = Vector2(24, 24)
+	b.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Style.C_RED
+	sb.set_corner_radius_all(12)
+	sb.set_border_width_all(3)
+	sb.border_color = Style.C_INK
+	Style.neon(sb, Style.C_RED, 8, 0.6)
+	b.add_theme_stylebox_override("panel", sb)
+	b.visible = false
+	return b
+
+func _style_nav_item(id: String, active: bool) -> void:
+	var btn: Button = nav_buttons.get(id)
+	if not is_instance_valid(btn):
+		return
 	var transp := _nav_sb(Color(0, 0, 0, 0))
 	if active:
 		var on := _nav_sb(Style.C_CYAN)
@@ -320,6 +507,11 @@ func _style_nav_button(btn: Button, active: bool) -> void:
 		btn.add_theme_stylebox_override("hover", _nav_sb(Style.C_CARD_ALT))
 		btn.add_theme_stylebox_override("pressed", transp)
 	btn.add_theme_stylebox_override("focus", transp)
+	var fg := Style.C_BG if active else Style.C_INK_SOFT
+	if nav_icons.has(id) and is_instance_valid(nav_icons[id]):
+		nav_icons[id].modulate = fg
+		if active:
+			Style.pop(nav_icons[id], 1.2)
 
 func _nav_sb(color: Color) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
@@ -351,7 +543,7 @@ func _show_page(id: String) -> void:
 	if EXTRA_PAGES.has(id):
 		nav_active = "mais"
 	for pid in nav_buttons:
-		_style_nav_button(nav_buttons[pid], pid == nav_active)
+		_style_nav_item(pid, pid == nav_active)
 		nav_buttons[pid].button_pressed = (pid == nav_active)
 	_refresh_all()
 
@@ -362,12 +554,90 @@ func _build_overlay() -> void:
 	add_child(overlay)
 
 func _on_money_changed(v: float) -> void:
-	if money_label:
+	# Texto e animado suavemente em _process (count-up). Snap so na primeira vez.
+	if money_label and display_money <= 0.0:
+		display_money = v
 		money_label.text = "R$ %s" % _fmt_money(v)
 
 func _on_gems_changed(v: int) -> void:
 	if gems_label:
 		gems_label.text = str(v)
+	if is_instance_valid(gem_icon):
+		Style.jiggle(gem_icon)
+
+func _update_prestige_strip() -> void:
+	if not is_instance_valid(prestige_bar):
+		return
+	var frac := clampf(GameState.money / Prestige.MIN_MONEY, 0.0, 1.0)
+	prestige_bar.value = frac * 100.0
+	if not is_instance_valid(prestige_strip_lbl):
+		return
+	if Prestige.can_prestige():
+		prestige_strip_lbl.text = "Prestígio pronto!"
+		prestige_strip_lbl.add_theme_color_override("font_color", Style.C_MAGENTA)
+	else:
+		prestige_strip_lbl.text = "Próx. Prestígio"
+		prestige_strip_lbl.add_theme_color_override("font_color", Style.C_INK_SOFT)
+
+func _update_nav_badges() -> void:
+	if not nav_badges.has("mais") or not is_instance_valid(nav_badges["mais"]):
+		return
+	var done := 0
+	for c in Contracts.active:
+		if Contracts.is_complete(c):
+			done += 1
+	nav_badges["mais"].visible = DailyRewards.can_claim() or Prestige.can_prestige() or done > 0
+
+func _show_gem_shop() -> void:
+	var parts := _modal_panel(Style.C_GOLD)
+	var dim: ColorRect = parts[0]
+	var box: VBoxContainer = parts[1]
+	var ti := Style.title("Gemas", 40, Style.C_GOLD)
+	ti.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(ti)
+	box.add_child(_centered_line("Gemas aceleram seu império: boosts e desbloqueios.", 24, Style.C_INK_SOFT))
+	var ad := Button.new()
+	ad.text = "Assistir anúncio  +2 gemas"
+	ad.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(ad, Style.C_GREEN, Color.WHITE, 30, 104)
+	ad.pressed.connect(_watch_ad_for_gems.bind(dim))
+	box.add_child(ad)
+	var boost := Button.new()
+	if Posts.can_boost():
+		boost.text = "Ativar Boost 2× (5 gemas)"
+		_style_button(boost, Style.C_BLUE, Color.WHITE, 30, 104)
+		boost.pressed.connect(_activate_boost_from_shop.bind(dim))
+	else:
+		boost.text = "Boost indisponível agora"
+		_style_button(boost, Style.C_NEUTRAL, Color.WHITE, 30, 104)
+		boost.disabled = true
+	boost.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_child(boost)
+	var close := Button.new()
+	close.text = "Fechar"
+	close.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(close, Style.C_NEUTRAL, Color.WHITE, 28, 92)
+	close.pressed.connect(dim.queue_free)
+	box.add_child(close)
+
+func _watch_ad_for_gems(dim: ColorRect) -> void:
+	# Stub de anúncio recompensado (a integrar com SDK): concede gemas e conta a métrica.
+	GameState.change_gems(2)
+	GameState.bump_stat("ads_watched", 1.0)
+	if has_node("/root/Audio"):
+		Audio.levelup()
+	if is_instance_valid(dim):
+		dim.queue_free()
+	_mascot_react()
+	_toast("Anúncio assistido! +2 gemas.")
+
+func _activate_boost_from_shop(dim: ColorRect) -> void:
+	if Posts.activate_boost():
+		_toast("Boost 2× ativado por 5 min!")
+	else:
+		_toast("Precisa de 5 gemas.")
+	if is_instance_valid(dim):
+		dim.queue_free()
 
 func _on_city_changed(_id: String) -> void:
 	var c: Dictionary = Economy.CITIES[GameState.current_city_id]
@@ -388,6 +658,7 @@ func _refresh_all() -> void:
 	_refresh_contratos()
 	_refresh_prestigio()
 	_refresh_mais()
+	_refresh_stats()
 
 func _refresh_home() -> void:
 	if not page_vbox.has("inicio"):
@@ -421,9 +692,30 @@ func _make_passthrough(node: Node) -> void:
 	for child in node.get_children():
 		_make_passthrough(child)
 
+# Emblema de cenario para a estrada. Forma/posicao variam por cidade (distancia d).
+func _path_deco(d: int, col: Color, i: int, n: int) -> Control:
+	var sz := 16.0
+	var shape := ColorRect.new()
+	shape.color = col
+	shape.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var anchor: float = (float(i) + 0.5) / float(n)
+	shape.anchor_left = anchor
+	shape.anchor_right = anchor
+	shape.anchor_top = 0.0
+	shape.anchor_bottom = 0.0
+	shape.offset_left = -sz * 0.5
+	shape.offset_right = sz * 0.5
+	shape.offset_top = 14.0
+	shape.offset_bottom = 14.0 + sz
+	if d % 2 == 1:
+		shape.pivot_offset = Vector2(sz * 0.5, sz * 0.5)
+		shape.rotation_degrees = 45.0
+	return shape
+
 func _post_card(city_id: String) -> PanelContainer:
 	var p: Dictionary = Posts.posts[city_id]
 	var c: Dictionary = Economy.CITIES[city_id]
+	var d: int = Posts.ORDER.find(city_id)
 	var card := PanelContainer.new()
 	card.add_theme_stylebox_override("panel", Style.sb_card_neon(c.cor.lerp(Style.C_CYAN, 0.25)))
 	post_widgets[city_id] = { "bar": null, "cart": null, "prog": null, "card": card, "ready_lbl": null }
@@ -455,8 +747,12 @@ func _post_card(city_id: String) -> PanelContainer:
 	Style.use_display(nm, 34)
 	nm.add_theme_color_override("font_color", Style.C_INK)
 	namebox.add_child(nm)
+	var chiprow := HBoxContainer.new()
+	chiprow.add_theme_constant_override("separation", 6)
 	if p.unlocked:
-		namebox.add_child(Style.chip("Nível %d" % int(p.nivel), Style.C_BLUE))
+		chiprow.add_child(Style.chip("Nível %d" % int(p.nivel), Style.C_BLUE))
+	chiprow.add_child(Style.chip("Rota %d" % (d + 1), c.cor.lerp(Style.C_CYAN, 0.4), Style.C_BG))
+	namebox.add_child(chiprow)
 
 	if not p.unlocked:
 		var lock := HBoxContainer.new()
@@ -468,6 +764,7 @@ func _post_card(city_id: String) -> PanelContainer:
 		_style_button(ub, Style.C_ORANGE, Color.WHITE, 28, 92)
 		ub.disabled = GameState.money < Posts.unlock_cost(city_id)
 		ub.pressed.connect(func(): Posts.buy_unlock(city_id))
+		Style.shine_sweep(ub)
 		lock.add_child(ub)
 		box.add_child(lock)
 		post_widgets[city_id]["unlock_btn"] = ub
@@ -475,27 +772,55 @@ func _post_card(city_id: String) -> PanelContainer:
 		_make_passthrough(box)
 		return card
 
+	var band_col: Color = c.cor.darkened(0.58)
+	var road_col: Color = c.cor.lerp(Style.C_GOLD, 0.30)
+	var deco_col: Color = c.cor.lerp(Style.C_INK, 0.45)
+
 	var prog := Control.new()
-	prog.custom_minimum_size = Vector2(0, 84)
+	prog.custom_minimum_size = Vector2(0, 104 + mini(d, 6) * 6)
 	box.add_child(prog)
-	var bar := Style.progress(0, 100, c.cor.lerp(Style.C_GREEN, 0.4))
-	bar.set_anchors_preset(Control.PRESET_FULL_RECT)
-	bar.offset_top = 14
-	bar.offset_bottom = -14
+
+	# Terreno tematico (banda) -- cor distinta por cidade
+	var band := Panel.new()
+	band.set_anchors_preset(Control.PRESET_FULL_RECT)
+	band.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var bsb := StyleBoxFlat.new()
+	bsb.bg_color = band_col
+	bsb.set_corner_radius_all(18)
+	bsb.set_border_width_all(2)
+	bsb.border_color = c.cor.lerp(Style.C_BG, 0.25)
+	band.add_theme_stylebox_override("panel", bsb)
+	prog.add_child(band)
+
+	# Cenario: d+3 emblemas (forma/cor/quantidade variam por cidade)
+	var deco_n: int = d + 3
+	for i in deco_n:
+		prog.add_child(_path_deco(d, deco_col, i, deco_n))
+
+	# Estrada (barra de progresso) na parte de baixo
+	var bar := Style.progress(0, 100, road_col)
+	bar.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	bar.offset_left = 12
+	bar.offset_right = -12
+	bar.offset_top = -42
+	bar.offset_bottom = -16
 	prog.add_child(bar)
+
 	var cart := _icon("res://art/ui/cart.svg", 64)
+	cart.modulate = Color.WHITE.lerp(c.cor, 0.3)
 	prog.add_child(cart)
 	var ready_lbl := Label.new()
-	ready_lbl.text = "TOQUE PARA COLETAR"
+	ready_lbl.text = "★ TOQUE PARA COLETAR ★"
 	ready_lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
 	ready_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	ready_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	Style.use_display(ready_lbl, 26)
+	Style.use_display(ready_lbl, 27)
 	ready_lbl.add_theme_color_override("font_color", Style.C_BG)
 	ready_lbl.add_theme_color_override("font_outline_color", Color(1, 1, 1, 0.7))
 	ready_lbl.add_theme_constant_override("outline_size", 6)
 	ready_lbl.visible = false
 	prog.add_child(ready_lbl)
+	Style.breathe(ready_lbl, 0.06, 0.5)
 	post_widgets[city_id].bar = bar
 	post_widgets[city_id].cart = cart
 	post_widgets[city_id].prog = prog
@@ -515,11 +840,15 @@ func _post_card(city_id: String) -> PanelContainer:
 	post_widgets[city_id]["up_btn"] = up
 	post_widgets[city_id]["up_cost"] = ucost
 	if p.manager:
+		var autobox := HBoxContainer.new()
+		autobox.add_theme_constant_override("separation", 6)
+		autobox.custom_minimum_size = Vector2(150, 0)
+		autobox.alignment = BoxContainer.ALIGNMENT_CENTER
+		autobox.add_child(Style.avatar_badge(Style.emp_face_path("Gerente"), Style.C_GREEN, 70))
 		var auto := Style.chip("AUTO", Style.C_GREEN)
-		auto.custom_minimum_size = Vector2(150, 0)
-		auto.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		auto.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		row.add_child(auto)
+		autobox.add_child(auto)
+		row.add_child(autobox)
 	else:
 		var mcost := Posts.manager_cost(city_id)
 		var mg := Button.new()
@@ -547,6 +876,18 @@ func _on_collected(city_id: String, amount: float) -> void:
 		Style.pop(w.card)
 		var gp: Vector2 = w.card.global_position + Vector2(w.card.size.x * 0.5, 20)
 		_float_text("+R$ %s" % _fmt_money(amount), gp, Style.C_GREEN)
+		var from_pos: Vector2 = w.card.global_position + w.card.size * 0.5
+		var to_pos: Vector2 = _wallet_pos()
+		Style.coin_burst(overlay, from_pos, to_pos, 8, _on_coin_landed)
+
+func _wallet_pos() -> Vector2:
+	if is_instance_valid(coin_icon):
+		return coin_icon.global_position + coin_icon.size * 0.5
+	return Vector2(120, 90)
+
+func _on_coin_landed() -> void:
+	if is_instance_valid(coin_icon):
+		Style.jiggle(coin_icon)
 
 func _city_banner() -> PanelContainer:
 	var c: Dictionary = Economy.CITIES[GameState.current_city_id]
@@ -607,6 +948,7 @@ func _refresh_mais() -> void:
 	var items := [
 		{ "id": "prestigio", "label": prest_label, "hot": Prestige.can_prestige() },
 		{ "id": "contratos", "label": contratos_label, "hot": done > 0 },
+		{ "id": "estatisticas", "label": "Estatísticas do Império", "hot": false },
 		{ "id": "viajar", "label": "Viajar entre cidades", "hot": false },
 		{ "id": "mochila", "label": "Mochila", "hot": false },
 		{ "id": "noticias", "label": "Notícias do mercado", "hot": false },
@@ -628,45 +970,58 @@ func _refresh_contratos() -> void:
 	_clear(v)
 	v.add_child(_section_label("Contratos do submundo"))
 	for c in Contracts.active:
-		var card := _card()
+		var done: bool = Contracts.is_complete(c)
+		var card := _card(Style.C_GREEN if done else Color(0, 0, 0, 0), 3 if done else 0)
 		var box := VBoxContainer.new()
 		box.add_theme_constant_override("separation", 8)
 		card.add_child(box)
+		var hrow := HBoxContainer.new()
+		hrow.add_theme_constant_override("separation", 12)
+		hrow.add_child(_icon(_contract_icon_path(String(c.tipo)), 56))
 		var desc := Label.new()
 		desc.text = Contracts.descricao(c)
-		Style.use_display(desc, 28)
+		Style.use_display(desc, 27)
 		desc.add_theme_color_override("font_color", Style.C_INK)
 		desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		box.add_child(desc)
+		desc.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		hrow.add_child(desc)
+		box.add_child(hrow)
 		box.add_child(Style.progress(int(c.progresso), int(c.alvo), Style.C_CYAN))
 		var info := HBoxContainer.new()
+		info.add_theme_constant_override("separation", 8)
 		var prog := Label.new()
 		prog.text = "%d / %d" % [int(c.progresso), int(c.alvo)]
-		prog.add_theme_font_size_override("font_size", 22)
+		Style.use_display(prog, 22)
 		prog.add_theme_color_override("font_color", Style.C_INK_SOFT)
 		prog.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		info.add_child(prog)
-		var rew := Label.new()
-		var rtxt := "Recompensa: R$ %s" % _fmt_money(float(c.reward))
+		info.add_child(Style.stat_pill("res://art/ui/coin.svg", _fmt_money(float(c.reward)), Style.C_GOLD))
 		if int(c.gems) > 0:
-			rtxt += "  + %d gemas" % int(c.gems)
-		rew.text = rtxt
-		Style.use_display(rew, 22)
-		rew.add_theme_color_override("font_color", Style.C_GOLD)
-		info.add_child(rew)
+			info.add_child(Style.stat_pill("res://art/ui/gem.svg", "%d" % int(c.gems), Style.C_CYAN))
 		box.add_child(info)
 		var claim := Button.new()
-		claim.text = "Coletar recompensa" if Contracts.is_complete(c) else "Em andamento"
+		claim.text = "Coletar" if done else "Em andamento"
 		claim.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_style_button(claim, Style.C_GREEN if Contracts.is_complete(c) else Style.C_NEUTRAL, Color.WHITE, 26, 88)
-		claim.disabled = not Contracts.is_complete(c)
+		_style_button(claim, Style.C_GREEN if done else Style.C_NEUTRAL, Color.WHITE, 26, 88)
+		if done:
+			Style.set_btn_icon(claim, "res://art/ui/ic_check.svg", 32)
+		claim.disabled = not done
 		claim.pressed.connect(_claim_contract.bind(c))
 		box.add_child(claim)
 		v.add_child(card)
 
+func _contract_icon_path(tipo: String) -> String:
+	match tipo:
+		"coletar": return "res://art/ui/cart.svg"
+		"vender": return "res://art/ui/ic_sell.svg"
+		"melhorar": return "res://art/ui/ic_train.svg"
+		"ganhar": return "res://art/ui/coin.svg"
+	return "res://art/ui/ic_check.svg"
+
 func _claim_contract(c: Dictionary) -> void:
 	if Contracts.claim(c):
 		_toast("Contrato concluído! Recompensa coletada.")
+		_celebrate(Style.C_GREEN)
 
 func _refresh_prestigio() -> void:
 	if not page_vbox.has("prestigio"):
@@ -717,6 +1072,7 @@ func _refresh_prestigio() -> void:
 		pbtn.text = "Precisa de R$ %s" % _fmt_money(Prestige.MIN_MONEY)
 	pbtn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_button(pbtn, Style.C_MAGENTA, Color.WHITE, 28, 108)
+	Style.set_btn_icon(pbtn, "res://art/ui/nav_inicio.svg", 34)
 	pbtn.disabled = not Prestige.can_prestige()
 	pbtn.pressed.connect(_confirm_prestige)
 	rb.add_child(pbtn)
@@ -749,6 +1105,7 @@ func _refresh_prestigio() -> void:
 		buy.text = "Comprar — %d PP" % cost
 		buy.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_style_button(buy, Style.C_GREEN, Color.WHITE, 24, 86)
+		Style.set_btn_icon(buy, "res://art/ui/ic_train.svg", 28)
 		buy.disabled = not Prestige.can_buy(id)
 		buy.pressed.connect(_buy_talent.bind(id))
 		box.add_child(buy)
@@ -757,8 +1114,12 @@ func _refresh_prestigio() -> void:
 func _buy_talent(id: String) -> void:
 	if Prestige.buy_talent(id):
 		_toast("Talento aprimorado.")
+		if has_node("/root/Audio"):
+			Audio.levelup()
 	else:
 		_toast("Pontos de Prestígio insuficientes.")
+		if has_node("/root/Audio"):
+			Audio.error()
 
 func _confirm_prestige() -> void:
 	var parts := _modal_panel(Style.C_MAGENTA)
@@ -807,67 +1168,110 @@ func _on_prestiged(pp_gained: int) -> void:
 	btn.pressed.connect(dim.queue_free)
 	box.add_child(btn)
 	_show_page("inicio")
+	var c := overlay.size * 0.5
+	if c == Vector2.ZERO:
+		c = Vector2(540, 760)
+	Style.confetti(overlay, Vector2(c.x, c.y - 160), 40)
+	if has_node("/root/Audio"):
+		Audio.levelup()
+	_mascot_react()
 
 func _refresh_market() -> void:
 	var v: VBoxContainer = page_vbox["mercado"]
 	_clear(v)
 	v.add_child(_city_banner())
+	v.add_child(_market_filter_row())
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 14)
+	grid.add_theme_constant_override("v_separation", 14)
+	v.add_child(grid)
 	for product_id in Economy.PRODUCTS:
 		var p: Dictionary = Economy.PRODUCTS[product_id]
-		var price: float = Economy.price_at(GameState.current_city_id, product_id)
-		var hot: bool = Economy.has_event_for(GameState.current_city_id, product_id)
-		var owned: int = GameState.inventory.get(product_id, 0)
+		if market_filter != "Tudo" and String(p.categoria) != market_filter:
+			continue
+		grid.add_child(_market_tile(product_id))
 
-		var card := _card()
-		var hb := HBoxContainer.new()
-		hb.add_theme_constant_override("separation", 14)
-		card.add_child(hb)
+func _market_filter_row() -> Control:
+	var cats := ["Tudo", "Alimentos", "Luxo", "Colecionáveis", "Antiguidades"]
+	var flow := HFlowContainer.new()
+	flow.add_theme_constant_override("h_separation", 8)
+	flow.add_theme_constant_override("v_separation", 8)
+	for cat in cats:
+		var active: bool = market_filter == cat
+		var b := Button.new()
+		b.text = cat
+		_style_button(b, Style.C_CYAN if active else Style.C_CARD_ALT, Style.C_BG if active else Style.C_INK_SOFT, 22, 60)
+		b.pressed.connect(_set_market_filter.bind(cat))
+		flow.add_child(b)
+	return flow
 
-		var info := VBoxContainer.new()
-		info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		info.add_theme_constant_override("separation", 6)
-		hb.add_child(info)
+func _set_market_filter(cat: String) -> void:
+	market_filter = cat
+	_refresh_market()
 
-		var name_lbl := Label.new()
-		name_lbl.text = p.nome
-		Style.use_display(name_lbl, 34)
-		name_lbl.add_theme_color_override("font_color", Style.C_INK)
-		info.add_child(name_lbl)
+func _hcenter(node: Control) -> HBoxContainer:
+	var h := HBoxContainer.new()
+	h.alignment = BoxContainer.ALIGNMENT_CENTER
+	h.add_child(node)
+	return h
 
-		var chips := HBoxContainer.new()
-		chips.add_theme_constant_override("separation", 8)
-		chips.add_child(_rarity_chip(p.raridade))
-		if hot:
-			chips.add_child(Style.chip("EM ALTA", Style.C_ORANGE))
-		if owned > 0:
-			chips.add_child(Style.chip("tem %d" % owned, Style.C_CARD_ALT, Style.C_INK_SOFT))
-		info.add_child(chips)
+func _market_tile(product_id: String) -> Control:
+	var p: Dictionary = Economy.PRODUCTS[product_id]
+	var price: float = Economy.price_at(GameState.current_city_id, product_id)
+	var hot: bool = Economy.has_event_for(GameState.current_city_id, product_id)
+	var owned: int = GameState.inventory.get(product_id, 0)
+	var rarcol: Color = Style.rarity_color(p.raridade)
 
-		var sub := Label.new()
-		sub.text = "R$ %s" % _fmt_money(price)
-		Style.use_display(sub, 30)
-		sub.add_theme_color_override("font_color", Style.C_GREEN)
-		info.add_child(sub)
+	var tile := Style.tile_panel(rarcol)
+	tile.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 8)
+	tile.add_child(box)
 
-		var btns := VBoxContainer.new()
-		btns.add_theme_constant_override("separation", 8)
-		hb.add_child(btns)
-		var buy := Button.new()
-		buy.text = "Comprar"
-		buy.custom_minimum_size = Vector2(190, 0)
-		_style_button(buy, Style.C_GREEN, Color.WHITE, 28, 78)
-		buy.disabled = GameState.money < price or GameState.capacity_left() < float(p.peso)
-		buy.pressed.connect(_buy.bind(product_id))
-		btns.add_child(buy)
+	if hot:
+		box.add_child(_hcenter(Style.chip("EM ALTA", Style.C_ORANGE)))
+
+	box.add_child(_hcenter(Style.thumb_frame(Style.item_texture(product_id), rarcol, 132)))
+
+	var name_lbl := Label.new()
+	name_lbl.text = p.nome
+	Style.use_display(name_lbl, 26)
+	name_lbl.add_theme_color_override("font_color", Style.C_INK)
+	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	name_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	name_lbl.custom_minimum_size = Vector2(0, 64)
+	box.add_child(name_lbl)
+
+	var chips := HBoxContainer.new()
+	chips.alignment = BoxContainer.ALIGNMENT_CENTER
+	chips.add_theme_constant_override("separation", 6)
+	chips.add_child(_rarity_chip(p.raridade))
+	if owned > 0:
+		chips.add_child(Style.chip("x%d" % owned, Style.C_CARD_ALT, Style.C_INK_SOFT))
+	box.add_child(chips)
+
+	box.add_child(_hcenter(Style.price_ribbon(_fmt_money(price), Style.C_GREEN)))
+
+	var buy := Button.new()
+	buy.text = "Comprar"
+	buy.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(buy, Style.C_GREEN, Color.WHITE, 24, 80)
+	Style.set_btn_icon(buy, "res://art/ui/ic_buy.svg", 34)
+	buy.disabled = GameState.money < price or GameState.capacity_left() < float(p.peso)
+	buy.pressed.connect(_buy.bind(product_id))
+	box.add_child(buy)
+
+	if owned > 0:
 		var sell := Button.new()
 		sell.text = "Vender"
-		sell.custom_minimum_size = Vector2(190, 0)
-		_style_button(sell, Style.C_ORANGE, Color.WHITE, 28, 78)
-		sell.disabled = owned <= 0
+		sell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_style_button(sell, Style.C_ORANGE, Color.WHITE, 22, 72)
+		Style.set_btn_icon(sell, "res://art/ui/ic_sell.svg", 30)
 		sell.pressed.connect(_sell.bind(product_id))
-		btns.add_child(sell)
+		box.add_child(sell)
 
-		v.add_child(card)
+	return tile
 
 func _refresh_inventory() -> void:
 	var v: VBoxContainer = page_vbox["mochila"]
@@ -879,24 +1283,27 @@ func _refresh_inventory() -> void:
 			var p: Dictionary = Economy.PRODUCTS[product_id]
 			var qty: int = GameState.inventory[product_id]
 			var price: float = Economy.price_at(GameState.current_city_id, product_id)
-			var card := _card()
+			var rc: Color = Style.rarity_color(p.raridade)
+			var card := _card(rc, 2)
+			var hb := HBoxContainer.new()
+			hb.add_theme_constant_override("separation", 14)
+			card.add_child(hb)
+			hb.add_child(Style.thumb_frame(Style.item_texture(product_id), rc, 88))
 			var box := VBoxContainer.new()
+			box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			box.add_theme_constant_override("separation", 6)
-			card.add_child(box)
+			hb.add_child(box)
 			var t := Label.new()
-			t.text = "%d × %s" % [qty, p.nome]
-			Style.use_display(t, 32)
+			t.text = p.nome
+			Style.use_display(t, 28)
 			t.add_theme_color_override("font_color", Style.C_INK)
 			box.add_child(t)
 			var chips := HBoxContainer.new()
-			chips.add_theme_constant_override("separation", 8)
+			chips.add_theme_constant_override("separation", 6)
 			chips.add_child(_rarity_chip(p.raridade))
+			chips.add_child(Style.chip("x%d" % qty, Style.C_CARD_ALT, Style.C_INK_SOFT))
 			box.add_child(chips)
-			var s := Label.new()
-			s.text = "Vale R$ %s cada · total R$ %s" % [_fmt_money(price), _fmt_money(price * qty)]
-			s.add_theme_font_size_override("font_size", 25)
-			s.add_theme_color_override("font_color", Style.C_INK_SOFT)
-			box.add_child(s)
+			box.add_child(Style.stat_pill("res://art/ui/coin.svg", "%s · total %s" % [_fmt_money(price), _fmt_money(price * qty)], Style.C_GREEN))
 			v.add_child(card)
 	var sep := Control.new()
 	sep.custom_minimum_size = Vector2(0, 16)
@@ -904,11 +1311,13 @@ func _refresh_inventory() -> void:
 	var idle_btn := Button.new()
 	idle_btn.text = "Simular 6h offline (teste)"
 	_style_button(idle_btn, Style.C_NEUTRAL, Color.WHITE, 26, 82)
+	Style.set_btn_icon(idle_btn, "res://art/ui/ic_clock.svg", 30)
 	idle_btn.pressed.connect(_debug_idle.bind(6.0))
 	v.add_child(idle_btn)
 	var wipe_btn := Button.new()
 	wipe_btn.text = "Reiniciar progresso"
 	_style_button(wipe_btn, Style.C_RED, Color.WHITE, 26, 78)
+	Style.set_btn_icon(wipe_btn, "res://art/ui/ic_fire.svg", 28)
 	wipe_btn.pressed.connect(_confirm_wipe)
 	v.add_child(wipe_btn)
 
@@ -942,8 +1351,9 @@ func _refresh_npcs() -> void:
 		nome.add_theme_color_override("font_color", Style.C_INK)
 		info.add_child(nome)
 		var chips := HBoxContainer.new()
-		chips.add_theme_constant_override("separation", 8)
+		chips.add_theme_constant_override("separation", 6)
 		chips.add_child(Style.chip(npc.arquetipo, Style.C_BLUE))
+		chips.add_child(Style.chip(NPCs.tier_name(int(npc.afinidade)), Style.C_MAGENTA))
 		info.add_child(chips)
 		var spec := Label.new()
 		spec.text = NPCs.specialty(npc_id)
@@ -951,15 +1361,12 @@ func _refresh_npcs() -> void:
 		spec.add_theme_color_override("font_color", Style.C_CYAN)
 		spec.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		info.add_child(spec)
-		var rel := Label.new()
-		rel.text = "%s · %d/100" % [NPCs.tier_name(int(npc.afinidade)), int(npc.afinidade)]
-		rel.add_theme_font_size_override("font_size", 21)
-		rel.add_theme_color_override("font_color", Style.C_INK_SOFT)
-		info.add_child(rel)
+		info.add_child(Style.attr_bar("♥", int(npc.afinidade), Style.C_MAGENTA))
 		var btn := Button.new()
 		btn.text = "Negociar"
 		btn.custom_minimum_size = Vector2(190, 0)
 		_style_button(btn, Style.C_GREEN, Color.WHITE, 26, 96)
+		Style.set_btn_icon(btn, "res://art/ui/ic_sell.svg", 32)
 		btn.pressed.connect(_open_negotiation.bind(npc_id))
 		hb.add_child(btn)
 		v.add_child(card)
@@ -979,12 +1386,19 @@ func _refresh_news() -> void:
 		var box := VBoxContainer.new()
 		box.add_theme_constant_override("separation", 8)
 		card.add_child(box)
+		var trow := HBoxContainer.new()
+		trow.add_theme_constant_override("separation", 10)
+		var nic := _icon("res://art/ui/ic_clock.svg", 36)
+		nic.modulate = Style.C_ORANGE if ativo else Style.C_INK_SOFT
+		trow.add_child(nic)
 		var titulo := Label.new()
 		titulo.text = ev.template.titulo
 		Style.use_display(titulo, 30)
 		titulo.add_theme_color_override("font_color", Style.C_INK)
-		box.add_child(titulo)
-		box.add_child(Style.chip("ATIVO" if ativo else "EM BREVE", Style.C_ORANGE if ativo else Style.C_NEUTRAL))
+		titulo.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		trow.add_child(titulo)
+		trow.add_child(Style.chip("ATIVO" if ativo else "EM BREVE", Style.C_ORANGE if ativo else Style.C_NEUTRAL))
+		box.add_child(trow)
 		var desc := Label.new()
 		desc.text = ev.template.descricao
 		desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -1027,12 +1441,13 @@ func _refresh_employees() -> void:
 	var sal: float = Employees.total_salary_per_hour()
 	var net: float = inc - sal
 	var sumcard := _card()
-	var sb := VBoxContainer.new()
-	sb.add_theme_constant_override("separation", 6)
-	sumcard.add_child(sb)
-	sb.add_child(_kv("Renda da equipe", "+R$ %s/h" % _fmt_money(inc), Style.C_GREEN))
-	sb.add_child(_kv("Salários", "-R$ %s/h" % _fmt_money(sal), Style.C_INK_SOFT))
-	sb.add_child(_kv("Líquido", "+R$ %s/h" % _fmt_money(maxf(0.0, net)), Style.C_ORANGE))
+	var sf := HFlowContainer.new()
+	sf.add_theme_constant_override("h_separation", 10)
+	sf.add_theme_constant_override("v_separation", 10)
+	sumcard.add_child(sf)
+	sf.add_child(Style.stat_pill("res://art/ui/coin.svg", "+R$ %s/h" % _fmt_money(inc), Style.C_GREEN))
+	sf.add_child(Style.stat_pill("res://art/ui/coin.svg", "−R$ %s/h" % _fmt_money(sal), Style.C_RED))
+	sf.add_child(Style.stat_pill("res://art/ui/coin.svg", "= R$ %s/h" % _fmt_money(maxf(0.0, net)), Style.C_GOLD))
 	v.add_child(sumcard)
 
 	v.add_child(_section_label("Sua equipe (%d)" % Employees.hired.size()))
@@ -1051,6 +1466,7 @@ func _refresh_employees() -> void:
 	rbtn.text = "Atualizar"
 	rbtn.custom_minimum_size = Vector2(210, 0)
 	_style_button(rbtn, Style.C_NEUTRAL, Color.WHITE, 24, 64)
+	Style.set_btn_icon(rbtn, "res://art/ui/ic_refresh.svg", 28)
 	rbtn.pressed.connect(func(): Employees.refresh_candidates(4))
 	head.add_child(rbtn)
 	v.add_child(head)
@@ -1107,18 +1523,12 @@ func _refresh_collection() -> void:
 		head.add_child(Style.chip("%d/%d" % [done, tot], Style.C_GREEN if complete else Style.C_CARD_ALT, Color.WHITE if complete else Style.C_INK_SOFT))
 		cb.add_child(head)
 		cb.add_child(Style.progress(done, tot, Style.C_GREEN))
-		var names := PackedStringArray()
+		var album := HFlowContainer.new()
+		album.add_theme_constant_override("h_separation", 8)
+		album.add_theme_constant_override("v_separation", 8)
 		for pid in Collection.products_in_category(cat):
-			if Collection.products.has(pid):
-				names.append(String(Economy.PRODUCTS[pid].nome))
-			else:
-				names.append("???")
-		var nl := Label.new()
-		nl.text = ", ".join(names)
-		nl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		nl.add_theme_font_size_override("font_size", 22)
-		nl.add_theme_color_override("font_color", Style.C_INK_SOFT)
-		cb.add_child(nl)
+			album.add_child(_collection_thumb(String(pid), Collection.products.has(pid)))
+		cb.add_child(album)
 		v.add_child(catcard)
 
 func _section_label(text: String) -> Label:
@@ -1128,20 +1538,73 @@ func _section_label(text: String) -> Label:
 	lbl.add_theme_color_override("font_color", Style.C_INK)
 	return lbl
 
+func _section_icon(text: String, icon_path: String, color: Color = Style.C_INK) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	var ic := _icon(icon_path, 38)
+	ic.modulate = color
+	row.add_child(ic)
+	var lbl := Label.new()
+	lbl.text = text
+	Style.use_display(lbl, 30)
+	lbl.add_theme_color_override("font_color", Style.C_INK)
+	row.add_child(lbl)
+	return row
+
+func _collection_thumb(pid: String, discovered: bool) -> Control:
+	if discovered and Economy.PRODUCTS.has(pid):
+		var rc: Color = Style.rarity_color(Economy.PRODUCTS[pid].raridade)
+		return Style.thumb_frame(Style.item_texture(pid), rc, 76)
+	var lock_tex: Texture2D = load("res://art/ui/lock.svg") if ResourceLoader.exists("res://art/ui/lock.svg") else null
+	var tf := Style.thumb_frame(lock_tex, Style.C_NEUTRAL, 76)
+	tf.modulate = Color(1, 1, 1, 0.45)
+	return tf
+
+func _emp_avatar(emp: Dictionary) -> Control:
+	var rarcol: Color = Style.rarity_color(String(emp.raridade))
+	var holder := Control.new()
+	holder.custom_minimum_size = Vector2(104, 104)
+	var av := Style.avatar_badge(Style.emp_face_path(String(emp.categoria)), rarcol, 100)
+	av.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	holder.add_child(av)
+	var badge := PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Style.C_GOLD
+	sb.set_corner_radius_all(14)
+	sb.set_border_width_all(3)
+	sb.border_color = Style.C_BG
+	sb.content_margin_left = 8
+	sb.content_margin_right = 8
+	sb.content_margin_top = 2
+	sb.content_margin_bottom = 2
+	badge.add_theme_stylebox_override("panel", sb)
+	var bl := Label.new()
+	bl.text = "Nv %d" % int(emp.nivel)
+	Style.use_display(bl, 18)
+	bl.add_theme_color_override("font_color", Style.C_BG)
+	badge.add_child(bl)
+	badge.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	badge.offset_left = -64
+	badge.offset_top = -34
+	badge.offset_right = 8
+	badge.offset_bottom = 4
+	holder.add_child(badge)
+	return holder
+
 func _employee_card(emp: Dictionary, is_hired: bool) -> PanelContainer:
-	var card := _card(Style.rarity_color(emp.raridade), 3)
+	var rarcol: Color = Style.rarity_color(String(emp.raridade))
+	var card := _card(rarcol, 3)
 	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 6)
+	box.add_theme_constant_override("separation", 8)
 	card.add_child(box)
 
 	var header := HBoxContainer.new()
-	header.add_theme_constant_override("separation", 12)
-	header.alignment = BoxContainer.ALIGNMENT_CENTER
+	header.add_theme_constant_override("separation", 14)
 	box.add_child(header)
-	header.add_child(Style.avatar_badge(Style.emp_face_path(String(emp.categoria)), Style.rarity_color(String(emp.raridade)), 96))
+	header.add_child(_emp_avatar(emp))
 	var hinfo := VBoxContainer.new()
 	hinfo.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	hinfo.add_theme_constant_override("separation", 4)
+	hinfo.add_theme_constant_override("separation", 6)
 	header.add_child(hinfo)
 	var nome := Label.new()
 	nome.text = String(emp.nome)
@@ -1149,24 +1612,28 @@ func _employee_card(emp: Dictionary, is_hired: bool) -> PanelContainer:
 	nome.add_theme_color_override("font_color", Style.C_INK)
 	hinfo.add_child(nome)
 	var chips := HBoxContainer.new()
-	chips.add_theme_constant_override("separation", 8)
+	chips.add_theme_constant_override("separation", 6)
 	chips.add_child(Style.chip(String(emp.categoria), Style.C_BLUE))
 	chips.add_child(_rarity_chip(String(emp.raridade)))
-	chips.add_child(Style.chip("Nível %d" % int(emp.nivel), Style.C_CARD_ALT, Style.C_INK_SOFT))
 	hinfo.add_child(chips)
+	# Renda x salario em pilulas
+	var econrow := HBoxContainer.new()
+	econrow.add_theme_constant_override("separation", 8)
+	econrow.add_child(Style.stat_pill("res://art/ui/coin.svg", "+%s" % _fmt_money(Employees.contribution_per_hour(emp)), Style.C_GREEN))
+	econrow.add_child(Style.stat_pill("res://art/ui/coin.svg", "−%s" % _fmt_money(Employees.salary_per_hour(emp)), Style.C_RED))
+	hinfo.add_child(econrow)
 
 	var a = emp.atributos
-	var attrs := Label.new()
-	attrs.text = "Neg %d · Vel %d · Int %d · Leal %d" % [int(a.get("Negociação", 0)), int(a.get("Velocidade", 0)), int(a.get("Inteligência", 0)), int(a.get("Lealdade", 0))]
-	attrs.add_theme_font_size_override("font_size", 22)
-	attrs.add_theme_color_override("font_color", Style.C_INK_SOFT)
-	box.add_child(attrs)
+	box.add_child(Style.attr_bar("Neg", int(a.get("Negociação", 0)), Style.C_MAGENTA))
+	box.add_child(Style.attr_bar("Vel", int(a.get("Velocidade", 0)), Style.C_CYAN))
+	box.add_child(Style.attr_bar("Int", int(a.get("Inteligência", 0)), Style.C_BLUE))
+	box.add_child(Style.attr_bar("Leal", int(a.get("Lealdade", 0)), Style.C_GOLD))
 
-	var econ := Label.new()
-	econ.text = "Rende +R$ %s/h · Salário -R$ %s/h" % [_fmt_money(Employees.contribution_per_hour(emp)), _fmt_money(Employees.salary_per_hour(emp))]
-	econ.add_theme_font_size_override("font_size", 22)
-	econ.add_theme_color_override("font_color", Style.C_GREEN)
-	box.add_child(econ)
+	# Barra de XP ate o proximo nivel
+	var needed: float = 100.0 * float(int(emp.nivel))
+	var xpbar := Style.progress(int(float(emp.get("xp", 0.0))), int(maxf(1.0, needed)), Style.C_GREEN)
+	xpbar.custom_minimum_size = Vector2(0, 14)
+	box.add_child(xpbar)
 
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 12)
@@ -1174,24 +1641,26 @@ func _employee_card(emp: Dictionary, is_hired: bool) -> PanelContainer:
 	if is_hired:
 		var tcost: float = Employees.train_cost(emp)
 		var tbtn := Button.new()
-		tbtn.text = "Treinar (R$ %s)" % _fmt_money(tcost)
+		tbtn.text = "Treinar  R$ %s" % _fmt_money(tcost)
 		tbtn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_style_button(tbtn, Style.C_GREEN, Color.WHITE, 26, 84)
+		_style_button(tbtn, Style.C_GREEN, Color.WHITE, 24, 84)
+		Style.set_btn_icon(tbtn, "res://art/ui/ic_train.svg", 30)
 		tbtn.disabled = GameState.money < tcost
 		tbtn.pressed.connect(_train_emp.bind(emp))
 		row.add_child(tbtn)
 		var fbtn := Button.new()
-		fbtn.text = "Demitir"
-		fbtn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_style_button(fbtn, Style.C_RED, Color.WHITE, 26, 84)
+		fbtn.custom_minimum_size = Vector2(96, 0)
+		_style_button(fbtn, Style.C_RED, Color.WHITE, 24, 84)
+		Style.set_btn_icon(fbtn, "res://art/ui/ic_fire.svg", 30)
 		fbtn.pressed.connect(_fire_emp.bind(emp))
 		row.add_child(fbtn)
 	else:
 		var hcost: float = Employees.hire_cost(emp)
 		var hbtn := Button.new()
-		hbtn.text = "Contratar (R$ %s)" % _fmt_money(hcost)
+		hbtn.text = "Contratar  R$ %s" % _fmt_money(hcost)
 		hbtn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_style_button(hbtn, Style.C_GREEN, Color.WHITE, 28, 90)
+		_style_button(hbtn, Style.C_GREEN, Color.WHITE, 26, 90)
+		Style.set_btn_icon(hbtn, "res://art/ui/ic_hire.svg", 32)
 		hbtn.disabled = GameState.money < hcost
 		hbtn.pressed.connect(_hire_emp.bind(emp))
 		row.add_child(hbtn)
@@ -1200,8 +1669,11 @@ func _employee_card(emp: Dictionary, is_hired: bool) -> PanelContainer:
 func _hire_emp(emp: Dictionary) -> void:
 	if Employees.hire(emp):
 		_toast("Contratou %s." % emp.nome)
+		_celebrate(Style.C_GREEN)
 	else:
 		_toast("Dinheiro insuficiente para contratar.")
+		if has_node("/root/Audio"):
+			Audio.error()
 
 func _fire_emp(emp: Dictionary) -> void:
 	Employees.fire(emp)
@@ -1210,16 +1682,24 @@ func _fire_emp(emp: Dictionary) -> void:
 func _train_emp(emp: Dictionary) -> void:
 	if Employees.train(emp):
 		_toast("Treinou %s. Agora nível %d." % [emp.nome, int(emp.nivel)])
+		if has_node("/root/Audio"):
+			Audio.collect()
 	else:
 		_toast("Dinheiro insuficiente para treinar.")
+		if has_node("/root/Audio"):
+			Audio.error()
 
 func _buy(product_id: String) -> void:
 	var price: float = Economy.price_at(GameState.current_city_id, product_id)
 	if GameState.money < price:
 		_toast("Dinheiro insuficiente para %s." % Economy.PRODUCTS[product_id].nome)
+		if has_node("/root/Audio"):
+			Audio.error()
 		return
 	if not GameState.add_item(product_id, 1):
 		_toast("Sem espaço na mochila.")
+		if has_node("/root/Audio"):
+			Audio.error()
 		return
 	GameState.change_money(-price)
 	_toast("Comprou 1 × %s por R$ %s." % [Economy.PRODUCTS[product_id].nome, _fmt_money(price)])
@@ -1307,6 +1787,7 @@ func _claim_daily(dim: ColorRect) -> void:
 	if is_instance_valid(dim):
 		dim.queue_free()
 	_toast("Recompensa diária coletada!")
+	_celebrate(Style.C_GOLD)
 
 func _modal_panel(border_col: Color) -> Array:
 
@@ -1355,6 +1836,10 @@ func _show_welcome(r: Dictionary) -> void:
 	var big := Style.title("+ R$ %s" % _fmt_money(income), 54, Style.C_ORANGE)
 	big.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(big)
+	if income > 0.0:
+		Style.count_up(big, 0.0, income, _fmt_welcome_income, 0.9)
+		if has_node("/root/Audio"):
+			Audio.levelup()
 	var ticks: int = int(r.get("ticks", 0))
 	if ticks > 0:
 		box.add_child(_centered_line("O mercado avançou %d ciclos." % ticks, 24, Style.C_INK_SOFT))
@@ -1367,6 +1852,144 @@ func _show_welcome(r: Dictionary) -> void:
 	_style_button(btn, Style.C_GREEN, Color.WHITE, 36, 110)
 	btn.pressed.connect(dim.queue_free)
 	box.add_child(btn)
+
+func _on_item_sold(amount: float) -> void:
+	GameState.bump_stat("items_sold", 1.0)
+	GameState.set_stat_max("best_sale", amount)
+	if has_node("/root/Audio"):
+		Audio.coin()
+	if is_instance_valid(coin_icon):
+		Style.jiggle(coin_icon)
+
+func _on_stats_changed() -> void:
+	if current_page == "estatisticas":
+		_refresh_stats()
+
+func _on_milestone(city_id: String, nivel: int) -> void:
+	var c: Dictionary = Economy.CITIES[city_id]
+	_toast("%s atingiu nível %d! Bônus permanente +30%% renda. (+1 gema)" % [c.nome, nivel])
+	_celebrate(Style.C_GOLD)
+
+func _on_unlocked(city_id: String) -> void:
+	var c: Dictionary = Economy.CITIES[city_id]
+	_toast("%s desbloqueado! Novo posto no império. (+2 gemas)" % c.nome)
+	if has_node("/root/Audio"):
+		Audio.unlock()
+	_celebrate(Style.C_ORANGE)
+
+# Festa: confete + flash + pulo do mascote. Usado em marcos, desbloqueios e prestigio.
+func _celebrate(_color: Color = Color.WHITE) -> void:
+	if not is_instance_valid(overlay):
+		return
+	var center := overlay.size * 0.5
+	if center == Vector2.ZERO:
+		center = Vector2(540, 760)
+	Style.screen_flash(overlay, Color(1, 1, 1, 0.35))
+	Style.confetti(overlay, Vector2(center.x, center.y - 120), 30)
+	if has_node("/root/Audio"):
+		Audio.levelup()
+	_mascot_react()
+
+func _fmt_seconds(secs: float) -> String:
+	var s: int = int(secs)
+	var d: int = s / 86400
+	var h: int = (s % 86400) / 3600
+	var m: int = (s % 3600) / 60
+	if d > 0:
+		return "%dd %dh %dmin" % [d, h, m]
+	if h > 0:
+		return "%dh %dmin" % [h, m]
+	return "%dmin" % m
+
+func _stats_card(rows: Array) -> PanelContainer:
+	var card := _card()
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 6)
+	card.add_child(box)
+	for r in rows:
+		box.add_child(_kv(String(r[0]), String(r[1]), r[2] if r.size() > 2 else Style.C_INK))
+	return card
+
+func _refresh_stats() -> void:
+	if not page_vbox.has("estatisticas"):
+		return
+	var v: VBoxContainer = page_vbox["estatisticas"]
+	_clear(v)
+	var s: Dictionary = GameState.stats
+
+	v.add_child(_section_icon("Dinheiro", "res://art/ui/coin.svg", Style.C_GOLD))
+	v.add_child(_stats_card([
+		["Saldo atual", "R$ %s" % _fmt_money(GameState.money), Style.C_GREEN],
+		["Maior saldo já alcançado", "R$ %s" % _fmt_money(float(s.get("highest_money", 0.0))), Style.C_GOLD],
+		["Total ganho na vida", "R$ %s" % _fmt_money(float(s.get("total_earned", 0.0))), Style.C_GREEN],
+		["Total gasto na vida", "R$ %s" % _fmt_money(float(s.get("total_spent", 0.0))), Style.C_ORANGE],
+		["Melhor venda única", "R$ %s" % _fmt_money(float(s.get("best_sale", 0.0))), Style.C_MAGENTA],
+		["Renda passiva /s", "R$ %s/s" % _fmt_money(Posts.auto_income_per_second() + Employees.income_per_second()), Style.C_CYAN],
+	]))
+
+	v.add_child(_section_icon("Postos & Carrinhos", "res://art/ui/cart.svg", Style.C_CYAN))
+	v.add_child(_stats_card([
+		["Postos desbloqueados", "%d / %d" % [Posts.unlocked_count(), Posts.ORDER.size()], Style.C_INK],
+		["Soma dos níveis de postos", str(Posts.total_levels()), Style.C_CYAN],
+		["Melhorias compradas", str(int(s.get("post_upgrades_bought", 0))), Style.C_GREEN],
+		["Coletas manuais feitas", str(int(s.get("total_collects", 0))), Style.C_INK],
+		["Gerentes contratados", "%d / %d" % [Posts.managers_count(), Posts.ORDER.size()], Style.C_ORANGE],
+		["Boosts ativados", str(int(s.get("boosts_activated", 0))), Style.C_MAGENTA],
+	]))
+
+	v.add_child(_section_icon("Equipe", "res://art/ui/nav_equipe.svg", Style.C_BLUE))
+	var hired_count: int = Employees.hired.size()
+	var next_cost: float = 0.0
+	if Employees.candidates.size() > 0:
+		next_cost = Employees.hire_cost(Employees.candidates[0])
+	v.add_child(_stats_card([
+		["Funcionários atuais", str(hired_count), Style.C_INK],
+		["Contratações na vida", str(int(s.get("employees_hired_total", 0))), Style.C_GREEN],
+		["Demissões na vida", str(int(s.get("employees_fired_total", 0))), Style.C_ORANGE],
+		["Treinamentos pagos", str(int(s.get("trainings_bought", 0))), Style.C_CYAN],
+		["Renda da equipe", "+R$ %s/h" % _fmt_money(Employees.total_income_per_hour()), Style.C_GREEN],
+		["Folha salarial", "-R$ %s/h" % _fmt_money(Employees.total_salary_per_hour()), Style.C_INK_SOFT],
+		["Próximo contrato (tier %d)" % hired_count, "R$ %s" % _fmt_money(next_cost), Style.C_GOLD],
+	]))
+
+	v.add_child(_section_icon("Mercado & Negociação", "res://art/ui/ic_sell.svg", Style.C_GREEN))
+	v.add_child(_stats_card([
+		["Itens comprados", str(int(s.get("items_bought", 0))), Style.C_INK],
+		["Itens vendidos", str(int(s.get("items_sold", 0))), Style.C_GREEN],
+		["Negociações fechadas", str(int(s.get("negotiations_won", 0))), Style.C_CYAN],
+		["Negociações perdidas", str(int(s.get("negotiations_lost", 0))), Style.C_ORANGE],
+		["Viagens feitas", str(int(s.get("travels_made", 0))), Style.C_BLUE],
+		["Ciclos de mercado", str(int(s.get("ticks_witnessed", 0))), Style.C_INK_SOFT],
+	]))
+
+	v.add_child(_section_icon("Coleção & Mundo", "res://art/ui/nav_colecao.svg", Style.C_ORANGE))
+	v.add_child(_stats_card([
+		["Produtos descobertos", "%d / %d" % [Collection.discovered_products(), Collection.total_products()], Style.C_INK],
+		["NPCs descobertos", "%d / %d" % [Collection.discovered_npcs(), Collection.total_npcs()], Style.C_INK],
+		["Cidades descobertas", "%d / %d" % [Collection.discovered_cities(), Collection.total_cities()], Style.C_INK],
+		["Bônus de coleção", "+%d%%" % int(round((Collection.global_sell_multiplier() - 1.0) * 100.0)), Style.C_ORANGE],
+	]))
+
+	v.add_child(_section_icon("Prestígio & Endgame", "res://art/ui/nav_inicio.svg", Style.C_MAGENTA))
+	v.add_child(_stats_card([
+		["Título atual", Prestige.title(), Style.C_MAGENTA],
+		["Refundações feitas", str(int(s.get("prestige_count", Prestige.count))), Style.C_MAGENTA],
+		["Talentos comprados", str(int(s.get("talents_bought", 0))), Style.C_CYAN],
+		["Pontos de Prestígio totais", str(Prestige.total_pp), Style.C_GOLD],
+		["Contratos concluídos", str(int(s.get("contracts_completed", 0))), Style.C_GREEN],
+	]))
+
+	v.add_child(_section_icon("Tempo & Gemas", "res://art/ui/ic_clock.svg", Style.C_CYAN))
+	var start_unix: float = float(s.get("first_play_unix", Time.get_unix_time_from_system()))
+	var days: int = int((Time.get_unix_time_from_system() - start_unix) / 86400.0)
+	v.add_child(_stats_card([
+		["Tempo jogado", _fmt_seconds(float(s.get("playtime_seconds", 0.0))), Style.C_CYAN],
+		["Dias desde o início", str(maxi(0, days)), Style.C_INK],
+		["Gemas atuais", str(GameState.gems), Style.C_GOLD],
+		["Gemas ganhas na vida", str(int(s.get("gems_earned", 0))), Style.C_GOLD],
+		["Gemas gastas na vida", str(int(s.get("gems_spent", 0))), Style.C_INK_SOFT],
+		["Anúncios assistidos", str(int(s.get("ads_watched", 0))), Style.C_BLUE],
+	]))
 
 func _centered_line(text: String, size: int, color: Color) -> Label:
 	var lbl := Label.new()
@@ -1447,6 +2070,9 @@ func _empty_label(text: String) -> Label:
 func _toast(msg: String) -> void:
 	if toast_label:
 		toast_label.text = msg
+
+func _fmt_welcome_income(v: float) -> String:
+	return "+ R$ %s" % _fmt_money(v)
 
 func _fmt_money(v: float) -> String:
 	var a := absf(v)

@@ -39,6 +39,7 @@ func buy_talent(id: String) -> bool:
 		return false
 	pp -= talent_cost(id)
 	talents[id] = level(id) + 1
+	GameState.bump_stat("talents_bought", 1.0)
 	emit_signal("prestige_changed")
 	return true
 
@@ -80,6 +81,7 @@ func do_prestige() -> int:
 	pp += gain
 	total_pp += gain
 	count += 1
+	GameState.bump_stat("prestige_count", 1.0)
 	var kept: float = GameState.STARTING_MONEY + GameState.money * keep_fraction()
 	GameState.money = kept
 	GameState.inventory = {}

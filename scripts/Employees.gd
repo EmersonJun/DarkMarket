@@ -7,7 +7,12 @@ const LAST_NAMES := ["Silva", "Souza", "Costa", "Lima", "Rocha", "Alves", "Perei
 const CATEGORIES := ["Comprador", "Vendedor", "Motorista", "Analista", "Gerente"]
 
 const RARITY_WEIGHTS := { "Comum": 70.0, "Incomum": 22.0, "Raro": 6.0, "Épico": 1.6, "Lendário": 0.35, "Mítico": 0.05 }
-const RARITY_MULT := { "Comum": 1.0, "Incomum": 1.4, "Raro": 2.0, "Épico": 3.2, "Lendário": 5.0, "Mítico": 8.0 }
+const RARITY_MULT := { "Comum": 1.0, "Incomum": 1.5, "Raro": 2.4, "Épico": 4.0, "Lendário": 7.0, "Mítico": 12.0 }
+
+const HIRE_COST_GROWTH := 1.55
+const HIRE_INCOME_GROWTH := 1.28
+const HIRE_SALARY_GROWTH := 1.22
+const TRAIN_GROWTH := 1.35
 
 var hired: Array = []
 var candidates: Array = []
@@ -16,7 +21,10 @@ var _next_id: int = 1
 func _ready() -> void:
 	randomize()
 	refresh_candidates(4)
-	Economy.market_tick.connect(func(): add_work_xp(10.0))
+	Economy.market_tick.connect(func():
+		add_work_xp(10.0)
+		GameState.bump_stat("ticks_witnessed", 1.0)
+	)
 
 func income_per_second() -> float:
 	return maxf(0.0, net_income_per_hour()) / 3600.0
@@ -26,26 +34,39 @@ func _process(delta: float) -> void:
 	if ips <= 0.0:
 		return
 	var m := Prestige.income_mult() if has_node("/root/Prestige") else 1.0
-	GameState.money += ips * m * delta
+	var add := ips * m * delta
+	GameState.money += add
+	GameState.stats.total_earned = float(GameState.stats.total_earned) + add
+	if GameState.money > float(GameState.stats.highest_money):
+		GameState.stats.highest_money = GameState.money
 	GameState.emit_signal("money_changed", GameState.money)
 
 func _roll_attr(mult: float) -> int:
 	return clampi(int(randf_range(10.0, 40.0) * mult), 1, 100)
 
-func _roll_rarity() -> String:
+func _roll_rarity(tier: int) -> String:
+	var weights := RARITY_WEIGHTS.duplicate()
+	var shift: float = clampf(float(tier) * 0.6, 0.0, 60.0)
+	weights["Comum"] = maxf(1.0, float(weights["Comum"]) - shift)
+	weights["Incomum"] = float(weights["Incomum"]) + shift * 0.45
+	weights["Raro"] = float(weights["Raro"]) + shift * 0.30
+	weights["Épico"] = float(weights["Épico"]) + shift * 0.15
+	weights["Lendário"] = float(weights["Lendário"]) + shift * 0.07
+	weights["Mítico"] = float(weights["Mítico"]) + shift * 0.03
 	var total: float = 0.0
-	for r in RARITY_WEIGHTS:
-		total += float(RARITY_WEIGHTS[r])
+	for r in weights:
+		total += float(weights[r])
 	var pick: float = randf() * total
 	var acc: float = 0.0
-	for r in RARITY_WEIGHTS:
-		acc += float(RARITY_WEIGHTS[r])
+	for r in weights:
+		acc += float(weights[r])
 		if pick <= acc:
 			return String(r)
 	return "Comum"
 
 func _new_employee() -> Dictionary:
-	var rar: String = _roll_rarity()
+	var tier: int = hired.size()
+	var rar: String = _roll_rarity(tier)
 	var mult: float = float(RARITY_MULT[rar])
 	var emp := {
 		"id": _next_id,
@@ -54,6 +75,7 @@ func _new_employee() -> Dictionary:
 		"raridade": rar,
 		"nivel": 1,
 		"xp": 0.0,
+		"tier": tier,
 		"atributos": {
 			"Negociação": _roll_attr(mult),
 			"Velocidade": _roll_attr(mult),
@@ -79,11 +101,21 @@ func _primary_attr(cat: String) -> String:
 		"Gerente": return "Lealdade"
 	return "Inteligência"
 
+func _tier_income_mult(emp: Dictionary) -> float:
+	return pow(HIRE_INCOME_GROWTH, float(int(emp.get("tier", 0))))
+
+func _tier_salary_mult(emp: Dictionary) -> float:
+	return pow(HIRE_SALARY_GROWTH, float(int(emp.get("tier", 0))))
+
+func _tier_hire_mult(emp: Dictionary) -> float:
+	return pow(HIRE_COST_GROWTH, float(int(emp.get("tier", 0))))
+
 func contribution_per_hour(emp: Dictionary) -> float:
 	var key: String = _primary_attr(String(emp.categoria))
 	var attr: float = float(emp.atributos.get(key, 30))
 	var base: float = 50.0 + attr * 6.0
 	base *= float(emp.nivel)
+	base *= _tier_income_mult(emp)
 	if String(emp.categoria) == "Gerente":
 		base *= 0.5
 	return base
@@ -91,7 +123,7 @@ func contribution_per_hour(emp: Dictionary) -> float:
 func salary_per_hour(emp: Dictionary) -> float:
 	var mult: float = float(RARITY_MULT[emp.raridade])
 	var loyalty: float = float(emp.atributos.get("Lealdade", 0)) / 100.0
-	return snapped(40.0 * mult * float(emp.nivel) * (1.0 - 0.3 * loyalty), 1.0)
+	return snapped(40.0 * mult * float(emp.nivel) * _tier_salary_mult(emp) * (1.0 - 0.3 * loyalty), 1.0)
 
 func manager_multiplier() -> float:
 	var m: float = 1.0
@@ -118,24 +150,30 @@ func net_income_per_hour() -> float:
 
 func hire_cost(emp: Dictionary) -> float:
 	var mult: float = float(RARITY_MULT[emp.raridade])
-	return snapped(500.0 * mult * (1.0 + 0.2 * float(int(emp.nivel) - 1)), 1.0)
+	var base: float = 600.0 * mult * _tier_hire_mult(emp)
+	base *= 1.0 + 0.2 * float(int(emp.nivel) - 1)
+	return snapped(base, 1.0)
 
 func train_cost(emp: Dictionary) -> float:
 	var mult: float = float(RARITY_MULT[emp.raridade])
-	return snapped(800.0 * mult * float(emp.nivel), 1.0)
+	return snapped(800.0 * mult * pow(TRAIN_GROWTH, float(int(emp.nivel) - 1)), 1.0)
 
 func hire(emp: Dictionary) -> bool:
 	var cost: float = hire_cost(emp)
 	if GameState.money < cost:
 		return false
 	GameState.change_money(-cost)
+	emp["tier"] = hired.size()
 	candidates.erase(emp)
 	hired.append(emp)
+	GameState.bump_stat("employees_hired_total", 1.0)
+	refresh_candidates(4)
 	emit_signal("roster_changed")
 	return true
 
 func fire(emp: Dictionary) -> void:
 	hired.erase(emp)
+	GameState.bump_stat("employees_fired_total", 1.0)
 	emit_signal("roster_changed")
 
 func reset() -> void:
@@ -150,6 +188,7 @@ func train(emp: Dictionary) -> bool:
 	emp.nivel = int(emp.nivel) + 1
 	for k in emp.atributos:
 		emp.atributos[k] = clampi(int(emp.atributos[k]) + int(randf_range(1.0, 4.0)), 1, 100)
+	GameState.bump_stat("trainings_bought", 1.0)
 	emit_signal("roster_changed")
 	return true
 
@@ -187,6 +226,7 @@ func deserialize_hired(data, next_id_val) -> void:
 				"raridade": String(d.get("raridade", "Comum")),
 				"nivel": int(d.get("nivel", 1)),
 				"xp": float(d.get("xp", 0.0)),
+				"tier": int(d.get("tier", hired.size())),
 				"atributos": attrs,
 			})
 	_next_id = int(next_id_val)
