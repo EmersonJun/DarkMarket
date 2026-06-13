@@ -1186,11 +1186,23 @@ func _refresh_market() -> void:
 	grid.add_theme_constant_override("h_separation", 14)
 	grid.add_theme_constant_override("v_separation", 14)
 	v.add_child(grid)
+	# Mostra: itens vendidos AQUI (compra) + itens que voce possui (venda em qualquer lugar).
+	var shown := {}
+	for pid in Economy.products_sold_in(GameState.current_city_id):
+		shown[pid] = true
+	for pid in GameState.inventory:
+		shown[pid] = true
+	var any := false
 	for product_id in Economy.PRODUCTS:
+		if not shown.has(product_id):
+			continue
 		var p: Dictionary = Economy.PRODUCTS[product_id]
 		if market_filter != "Tudo" and String(p.categoria) != market_filter:
 			continue
 		grid.add_child(_market_tile(product_id))
+		any = true
+	if not any:
+		v.add_child(_empty_label("Nada nesta categoria aqui. Troque de cidade (aba Viajar) ou de categoria."))
 
 func _market_filter_row() -> Control:
 	var cats := ["Tudo", "Alimentos", "Luxo", "Colecionáveis", "Antiguidades"]
@@ -1218,9 +1230,11 @@ func _hcenter(node: Control) -> HBoxContainer:
 
 func _market_tile(product_id: String) -> Control:
 	var p: Dictionary = Economy.PRODUCTS[product_id]
-	var price: float = Economy.price_at(GameState.current_city_id, product_id)
-	var hot: bool = Economy.has_event_for(GameState.current_city_id, product_id)
+	var city := GameState.current_city_id
+	var price: float = Economy.price_at(city, product_id)
+	var hot: bool = Economy.has_event_for(city, product_id)
 	var owned: int = GameState.inventory.get(product_id, 0)
+	var sold_here: bool = Economy.is_sold_in(city, product_id)
 	var rarcol: Color = Style.rarity_color(p.raridade)
 
 	var tile := Style.tile_panel(rarcol)
@@ -1229,10 +1243,20 @@ func _market_tile(product_id: String) -> Control:
 	box.add_theme_constant_override("separation", 8)
 	tile.add_child(box)
 
+	var topchips := HBoxContainer.new()
+	topchips.alignment = BoxContainer.ALIGNMENT_CENTER
+	topchips.add_theme_constant_override("separation", 6)
+	if Economy.is_exclusive_to(city, product_id):
+		topchips.add_child(Style.chip("EXCLUSIVO", Style.C_MAGENTA))
 	if hot:
-		box.add_child(_hcenter(Style.chip("EM ALTA", Style.C_ORANGE)))
+		topchips.add_child(Style.chip("EM ALTA", Style.C_ORANGE))
+	var tchip := _trend_chip(Economy.price_trend(city, product_id))
+	if tchip != null:
+		topchips.add_child(tchip)
+	if topchips.get_child_count() > 0:
+		box.add_child(topchips)
 
-	box.add_child(_hcenter(Style.thumb_frame(Style.item_texture(product_id), rarcol, 132)))
+	box.add_child(_tappable_thumb(product_id, rarcol, 132))
 
 	var name_lbl := Label.new()
 	name_lbl.text = p.nome
@@ -1240,7 +1264,7 @@ func _market_tile(product_id: String) -> Control:
 	name_lbl.add_theme_color_override("font_color", Style.C_INK)
 	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	name_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	name_lbl.custom_minimum_size = Vector2(0, 64)
+	name_lbl.custom_minimum_size = Vector2(0, 60)
 	box.add_child(name_lbl)
 
 	var chips := HBoxContainer.new()
@@ -1253,25 +1277,76 @@ func _market_tile(product_id: String) -> Control:
 
 	box.add_child(_hcenter(Style.price_ribbon(_fmt_money(price), Style.C_GREEN)))
 
-	var buy := Button.new()
-	buy.text = "Comprar"
-	buy.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_style_button(buy, Style.C_GREEN, Color.WHITE, 24, 80)
-	Style.set_btn_icon(buy, "res://art/ui/ic_buy.svg", 34)
-	buy.disabled = GameState.money < price or GameState.capacity_left() < float(p.peso)
-	buy.pressed.connect(_buy.bind(product_id))
-	box.add_child(buy)
+	var hint := _profit_hint_label(product_id, price)
+	if hint != null:
+		box.add_child(hint)
+
+	if sold_here:
+		var buy := Button.new()
+		buy.text = "Comprar"
+		buy.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_style_button(buy, Style.C_GREEN, Color.WHITE, 24, 78)
+		Style.set_btn_icon(buy, "res://art/ui/ic_buy.svg", 32)
+		buy.disabled = GameState.money < price or GameState.capacity_left() < float(p.peso)
+		buy.pressed.connect(_buy.bind(product_id))
+		box.add_child(buy)
 
 	if owned > 0:
 		var sell := Button.new()
-		sell.text = "Vender"
+		sell.text = "Vender tudo"
 		sell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_style_button(sell, Style.C_ORANGE, Color.WHITE, 22, 72)
-		Style.set_btn_icon(sell, "res://art/ui/ic_sell.svg", 30)
-		sell.pressed.connect(_sell.bind(product_id))
+		_style_button(sell, Style.C_ORANGE, Color.WHITE, 22, 70)
+		Style.set_btn_icon(sell, "res://art/ui/ic_sell.svg", 28)
+		sell.pressed.connect(_sell_all.bind(product_id))
 		box.add_child(sell)
 
 	return tile
+
+func _tappable_thumb(product_id: String, accent: Color, size: int) -> Control:
+	var holder := Control.new()
+	holder.custom_minimum_size = Vector2(0, size + 12)
+	var cc := CenterContainer.new()
+	cc.set_anchors_preset(Control.PRESET_FULL_RECT)
+	cc.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var tf := Style.thumb_frame(Style.item_texture(product_id), accent, size)
+	tf.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cc.add_child(tf)
+	holder.add_child(cc)
+	var tap := Button.new()
+	tap.flat = true
+	tap.focus_mode = Control.FOCUS_NONE
+	tap.set_anchors_preset(Control.PRESET_FULL_RECT)
+	tap.add_theme_stylebox_override("normal", _empty_sb())
+	tap.add_theme_stylebox_override("hover", _empty_sb())
+	tap.add_theme_stylebox_override("pressed", _empty_sb())
+	tap.add_theme_stylebox_override("focus", _empty_sb())
+	tap.pressed.connect(_item_detail_modal.bind(product_id))
+	holder.add_child(tap)
+	return holder
+
+func _trend_chip(trend: float) -> Control:
+	if trend <= 0.92:
+		return Style.chip("BARATO", Style.C_GREEN, Style.C_BG)
+	elif trend >= 1.08:
+		return Style.chip("CARO", Style.C_ORANGE, Style.C_BG)
+	return null
+
+func _profit_hint_label(product_id: String, price_here: float) -> Control:
+	var best: Dictionary = Economy.best_sell_city(product_id)
+	if String(best.city) == "" or String(best.city) == GameState.current_city_id:
+		return null
+	if price_here <= 0.0:
+		return null
+	var pct: int = int(round((float(best.price) / price_here - 1.0) * 100.0))
+	if pct < 4:
+		return null
+	var lbl := Label.new()
+	lbl.text = "Vender em %s  +%d%%" % [Economy.CITIES[best.city].nome, pct]
+	lbl.add_theme_font_size_override("font_size", 19)
+	lbl.add_theme_color_override("font_color", Style.C_CYAN)
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	return lbl
 
 func _refresh_inventory() -> void:
 	var v: VBoxContainer = page_vbox["mochila"]
@@ -1362,12 +1437,35 @@ func _refresh_npcs() -> void:
 		spec.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		info.add_child(spec)
 		info.add_child(Style.attr_bar("♥", int(npc.afinidade), Style.C_MAGENTA))
+		var fn: String = NPCs.npc_function(npc_id)
 		var btn := Button.new()
-		btn.text = "Negociar"
-		btn.custom_minimum_size = Vector2(190, 0)
-		_style_button(btn, Style.C_GREEN, Color.WHITE, 26, 96)
-		Style.set_btn_icon(btn, "res://art/ui/ic_sell.svg", 32)
-		btn.pressed.connect(_open_negotiation.bind(npc_id))
+		btn.custom_minimum_size = Vector2(200, 0)
+		match fn:
+			"fornecedor":
+				btn.text = "Comprar"
+				_style_button(btn, Style.C_BLUE, Color.WHITE, 26, 96)
+				Style.set_btn_icon(btn, "res://art/ui/ic_buy.svg", 32)
+				btn.pressed.connect(_open_supplier.bind(npc_id))
+			"informante":
+				btn.text = "Dica"
+				_style_button(btn, Style.C_CYAN, Style.C_BG, 26, 96)
+				Style.set_btn_icon(btn, "res://art/ui/ic_clock.svg", 30)
+				btn.pressed.connect(_buy_tip.bind(npc_id))
+			"atacadista":
+				btn.text = "Vender lote"
+				_style_button(btn, Style.C_ORANGE, Color.WHITE, 24, 96)
+				Style.set_btn_icon(btn, "res://art/ui/ic_sell.svg", 30)
+				btn.pressed.connect(_open_bulk_sell.bind(npc_id))
+			"colecionador":
+				btn.text = "Ofertar"
+				_style_button(btn, Style.C_MAGENTA, Color.WHITE, 26, 96)
+				Style.set_btn_icon(btn, "res://art/ui/ic_sell.svg", 30)
+				btn.pressed.connect(_open_negotiation.bind(npc_id))
+			_:
+				btn.text = "Negociar"
+				_style_button(btn, Style.C_GREEN, Color.WHITE, 26, 96)
+				Style.set_btn_icon(btn, "res://art/ui/ic_sell.svg", 32)
+				btn.pressed.connect(_open_negotiation.bind(npc_id))
 		hb.add_child(btn)
 		v.add_child(card)
 
@@ -1690,28 +1788,154 @@ func _train_emp(emp: Dictionary) -> void:
 			Audio.error()
 
 func _buy(product_id: String) -> void:
-	var price: float = Economy.price_at(GameState.current_city_id, product_id)
-	if GameState.money < price:
-		_toast("Dinheiro insuficiente para %s." % Economy.PRODUCTS[product_id].nome)
-		if has_node("/root/Audio"):
-			Audio.error()
-		return
-	if not GameState.add_item(product_id, 1):
-		_toast("Sem espaço na mochila.")
-		if has_node("/root/Audio"):
-			Audio.error()
-		return
-	GameState.change_money(-price)
-	_toast("Comprou 1 × %s por R$ %s." % [Economy.PRODUCTS[product_id].nome, _fmt_money(price)])
+	_buy_qty(product_id, 1)
 
 func _sell(product_id: String) -> void:
-	if GameState.inventory.get(product_id, 0) <= 0:
-		return
-	var price: float = Economy.price_at(GameState.current_city_id, product_id) * Collection.global_sell_multiplier() * Prestige.sell_mult()
-	GameState.remove_item(product_id, 1)
-	GameState.change_money(price)
-	GameState.emit_signal("item_sold", price)
-	_toast("Vendeu 1 × %s por R$ %s." % [Economy.PRODUCTS[product_id].nome, _fmt_money(price)])
+	_sell_qty(product_id, 1)
+
+func _sell_all(product_id: String) -> void:
+	var q: int = _sell_qty(product_id, GameState.inventory.get(product_id, 0))
+	if q > 0:
+		_sell_burst(q)
+
+func _max_buyable(product_id: String) -> int:
+	var p: Dictionary = Economy.PRODUCTS[product_id]
+	var price: float = Economy.price_at(GameState.current_city_id, product_id)
+	var by_money: int = int(GameState.money / price) if price > 0.0 else 0
+	var peso: float = float(p.peso)
+	var by_cap: int = int(GameState.capacity_left() / peso) if peso > 0.0 else 9999
+	return maxi(0, mini(by_money, by_cap))
+
+func _buy_qty(product_id: String, n: int) -> int:
+	var price: float = Economy.price_at(GameState.current_city_id, product_id)
+	var q: int = mini(n, _max_buyable(product_id))
+	if q <= 0:
+		_toast("Sem dinheiro ou espaço para %s." % Economy.PRODUCTS[product_id].nome)
+		if has_node("/root/Audio"):
+			Audio.error()
+		return 0
+	if not GameState.add_item(product_id, q):
+		if has_node("/root/Audio"):
+			Audio.error()
+		return 0
+	GameState.change_money(-price * q)
+	_toast("Comprou %d × %s por R$ %s." % [q, Economy.PRODUCTS[product_id].nome, _fmt_money(price * q)])
+	return q
+
+func _sell_qty(product_id: String, n: int) -> int:
+	var owned: int = GameState.inventory.get(product_id, 0)
+	var q: int = mini(n, owned)
+	if q <= 0:
+		return 0
+	var unit: float = Economy.price_at(GameState.current_city_id, product_id) * Collection.global_sell_multiplier() * Prestige.sell_mult()
+	var total: float = unit * q
+	GameState.remove_item(product_id, q)
+	GameState.change_money(total)
+	GameState.emit_signal("item_sold", total)
+	_toast("Vendeu %d × %s por R$ %s." % [q, Economy.PRODUCTS[product_id].nome, _fmt_money(total)])
+	return q
+
+func _sell_burst(qty: int) -> void:
+	var n: int = clampi(4 + qty, 4, 16)
+	Style.coin_burst(overlay, _screen_center(), _wallet_pos(), n, _on_coin_landed)
+
+func _screen_center() -> Vector2:
+	var c: Vector2 = overlay.size * 0.5
+	if c == Vector2.ZERO:
+		c = Vector2(540, 820)
+	return c
+
+func _item_detail_modal(product_id: String) -> void:
+	var p: Dictionary = Economy.PRODUCTS[product_id]
+	var city := GameState.current_city_id
+	var price: float = Economy.price_at(city, product_id)
+	var owned: int = GameState.inventory.get(product_id, 0)
+	var sold_here: bool = Economy.is_sold_in(city, product_id)
+	var rarcol: Color = Style.rarity_color(p.raridade)
+	var parts := _modal_panel(rarcol)
+	var dim: ColorRect = parts[0]
+	var box: VBoxContainer = parts[1]
+
+	box.add_child(_hcenter(Style.thumb_frame(Style.item_texture(product_id), rarcol, 150)))
+	var nm := Style.title(String(p.nome), 36, Style.C_INK)
+	nm.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(nm)
+
+	var chips := HBoxContainer.new()
+	chips.alignment = BoxContainer.ALIGNMENT_CENTER
+	chips.add_theme_constant_override("separation", 6)
+	chips.add_child(_rarity_chip(String(p.raridade)))
+	chips.add_child(Style.chip(String(p.categoria), Style.C_BLUE))
+	if owned > 0:
+		chips.add_child(Style.chip("tem %d" % owned, Style.C_CARD_ALT, Style.C_INK_SOFT))
+	box.add_child(chips)
+
+	box.add_child(_hcenter(Style.price_ribbon(_fmt_money(price), Style.C_GREEN)))
+	var best: Dictionary = Economy.best_sell_city(product_id)
+	if String(best.city) != "" and price > 0.0:
+		var pct: int = int(round((float(best.price) / price - 1.0) * 100.0))
+		var where: String = "aqui mesmo" if String(best.city) == city else "%s (+%d%%)" % [Economy.CITIES[best.city].nome, pct]
+		box.add_child(_centered_line("Melhor venda: %s" % where, 24, Style.C_CYAN))
+
+	if sold_here:
+		box.add_child(_centered_line("Comprar", 24, Style.C_INK_SOFT))
+		var buyrow := HBoxContainer.new()
+		buyrow.add_theme_constant_override("separation", 10)
+		buyrow.alignment = BoxContainer.ALIGNMENT_CENTER
+		for n in [1, 10]:
+			var b := Button.new()
+			b.text = "x%d" % n
+			b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			_style_button(b, Style.C_GREEN, Color.WHITE, 26, 84)
+			b.disabled = _max_buyable(product_id) < n
+			b.pressed.connect(_detail_buy.bind(product_id, n))
+			buyrow.add_child(b)
+		var bmax := Button.new()
+		bmax.text = "Máx"
+		bmax.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_style_button(bmax, Style.C_GREEN, Color.WHITE, 26, 84)
+		bmax.disabled = _max_buyable(product_id) <= 0
+		bmax.pressed.connect(_detail_buy.bind(product_id, 9999))
+		buyrow.add_child(bmax)
+		box.add_child(buyrow)
+
+	if owned > 0:
+		box.add_child(_centered_line("Vender", 24, Style.C_INK_SOFT))
+		var sellrow := HBoxContainer.new()
+		sellrow.add_theme_constant_override("separation", 10)
+		sellrow.alignment = BoxContainer.ALIGNMENT_CENTER
+		for n in [1, 10]:
+			var s := Button.new()
+			s.text = "x%d" % n
+			s.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			_style_button(s, Style.C_ORANGE, Color.WHITE, 26, 84)
+			s.disabled = owned < n
+			s.pressed.connect(_detail_sell.bind(product_id, n))
+			sellrow.add_child(s)
+		var sall := Button.new()
+		sall.text = "Tudo"
+		sall.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_style_button(sall, Style.C_ORANGE, Color.WHITE, 26, 84)
+		sall.pressed.connect(_detail_sell.bind(product_id, 9999))
+		sellrow.add_child(sall)
+		box.add_child(sellrow)
+
+	var close := Button.new()
+	close.text = "Fechar"
+	close.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(close, Style.C_NEUTRAL, Color.WHITE, 26, 84)
+	close.pressed.connect(dim.queue_free)
+	box.add_child(close)
+
+func _detail_buy(product_id: String, n: int) -> void:
+	if _buy_qty(product_id, n) > 0:
+		_item_detail_modal(product_id)
+
+func _detail_sell(product_id: String, n: int) -> void:
+	var q: int = _sell_qty(product_id, n)
+	if q > 0:
+		_item_detail_modal(product_id)
+		_sell_burst(q)
 
 func _travel(city_id: String) -> void:
 	_toast("Viajou para %s. Mercado oscilou." % Economy.CITIES[city_id].nome)
@@ -1739,6 +1963,203 @@ func _open_negotiation(npc_id: String) -> void:
 func _on_popup_closed(dim: ColorRect) -> void:
 	if is_instance_valid(dim):
 		dim.queue_free()
+
+# --- Fornecedor: comprar itens exclusivos da cidade -----------------------
+func _open_supplier(npc_id: String) -> void:
+	var npc: Dictionary = NPCs.NPCS[npc_id]
+	var parts := _modal_panel(Style.C_BLUE)
+	var dim: ColorRect = parts[0]
+	var box: VBoxContainer = parts[1]
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 12)
+	head.alignment = BoxContainer.ALIGNMENT_CENTER
+	head.add_child(Style.avatar_badge(Style.npc_face_path(npc.arquetipo), Style.C_BLUE, 96))
+	var ht := VBoxContainer.new()
+	ht.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ht.add_child(Style.title(String(npc.nome), 32, Style.C_INK))
+	ht.add_child(_centered_line("Mercadoria exclusiva — revenda longe daqui!", 20, Style.C_INK_SOFT))
+	head.add_child(ht)
+	box.add_child(head)
+
+	var stock: Array = NPCs.supplier_stock(npc_id)
+	if stock.is_empty():
+		box.add_child(_centered_line("Sem mercadoria nova agora. Volte depois.", 24, Style.C_INK_SOFT))
+	for pid in stock:
+		box.add_child(_supplier_row(npc_id, String(pid)))
+
+	var close := Button.new()
+	close.text = "Sair"
+	close.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(close, Style.C_NEUTRAL, Color.WHITE, 26, 84)
+	close.pressed.connect(dim.queue_free)
+	box.add_child(close)
+
+func _supplier_row(npc_id: String, product_id: String) -> Control:
+	var p: Dictionary = Economy.PRODUCTS[product_id]
+	var rc: Color = Style.rarity_color(p.raridade)
+	var price: float = NPCs.supplier_price(npc_id, product_id)
+	var card := _card(rc, 2)
+	var hb := HBoxContainer.new()
+	hb.add_theme_constant_override("separation", 12)
+	card.add_child(hb)
+	hb.add_child(Style.thumb_frame(Style.item_texture(product_id), rc, 80))
+	var info := VBoxContainer.new()
+	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	info.add_theme_constant_override("separation", 4)
+	hb.add_child(info)
+	info.add_child(Style.title(String(p.nome), 26, Style.C_INK))
+	var chips := HBoxContainer.new()
+	chips.add_theme_constant_override("separation", 6)
+	chips.add_child(_rarity_chip(String(p.raridade)))
+	info.add_child(chips)
+	info.add_child(Style.price_ribbon(_fmt_money(price), Style.C_BLUE))
+	var buy := Button.new()
+	buy.text = "Comprar"
+	buy.custom_minimum_size = Vector2(170, 0)
+	_style_button(buy, Style.C_GREEN, Color.WHITE, 24, 88)
+	Style.set_btn_icon(buy, "res://art/ui/ic_buy.svg", 30)
+	buy.disabled = GameState.money < price or GameState.capacity_left() < float(p.peso)
+	buy.pressed.connect(_buy_from_supplier.bind(npc_id, product_id))
+	hb.add_child(buy)
+	return card
+
+func _buy_from_supplier(npc_id: String, product_id: String) -> void:
+	var price: float = NPCs.supplier_price(npc_id, product_id)
+	var p: Dictionary = Economy.PRODUCTS[product_id]
+	if GameState.money < price:
+		_toast("Dinheiro insuficiente.")
+		if has_node("/root/Audio"):
+			Audio.error()
+		return
+	if not GameState.add_item(product_id, 1):
+		_toast("Sem espaço na mochila.")
+		if has_node("/root/Audio"):
+			Audio.error()
+		return
+	GameState.change_money(-price)
+	NPCs.add_affinity(npc_id, 1)
+	if has_node("/root/Audio"):
+		Audio.unlock()
+	_toast("Comprou %s do fornecedor!" % p.nome)
+	_open_supplier(npc_id)
+	Style.confetti(overlay, _screen_center() + Vector2(0, -120), 18)
+
+# --- Informante: dica paga ------------------------------------------------
+func _buy_tip(npc_id: String) -> void:
+	var npc: Dictionary = NPCs.NPCS[npc_id]
+	var cost: int = 1  # 1 gema
+	var parts := _modal_panel(Style.C_CYAN)
+	var dim: ColorRect = parts[0]
+	var box: VBoxContainer = parts[1]
+	box.add_child(_hcenter(Style.avatar_badge(Style.npc_face_path(npc.arquetipo), Style.C_CYAN, 96)))
+	box.add_child(_centered_line("%s sussurra..." % String(npc.nome), 26, Style.C_INK))
+	var tip: String = _make_tip()
+	box.add_child(_centered_line(tip, 26, Style.C_GOLD))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	box.add_child(row)
+	var pay := Button.new()
+	pay.text = "Pagar 1 gema pela dica"
+	pay.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(pay, Style.C_GOLD if GameState.gems >= cost else Style.C_NEUTRAL, Style.C_BG if GameState.gems >= cost else Style.C_INK, 24, 88)
+	pay.disabled = GameState.gems < cost
+	pay.pressed.connect(_confirm_tip.bind(npc_id, dim))
+	row.add_child(pay)
+	var no := Button.new()
+	no.text = "Agora não"
+	no.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(no, Style.C_NEUTRAL, Color.WHITE, 24, 88)
+	no.pressed.connect(dim.queue_free)
+	row.add_child(no)
+
+func _make_tip() -> String:
+	# Dica: melhor cidade p/ vender um item que voce tem; senao, evento ativo.
+	var owned: Array = GameState.inventory.keys()
+	if not owned.is_empty():
+		var pid: String = String(owned[randi() % owned.size()])
+		var best: Dictionary = Economy.best_sell_city(pid)
+		if String(best.city) != "":
+			return "%s está caro em %s — venda lá!" % [Economy.PRODUCTS[pid].nome, Economy.CITIES[best.city].nome]
+	if has_node("/root/News") and not News.active_events.is_empty():
+		var ev = News.active_events[0]
+		return "Fica de olho: %s" % String(ev.template.titulo)
+	return "Compre barato na origem e venda onde o preço sobe."
+
+func _confirm_tip(npc_id: String, dim: ColorRect) -> void:
+	if GameState.gems < 1:
+		return
+	GameState.change_gems(-1)
+	NPCs.add_affinity(npc_id, 1)
+	if has_node("/root/Audio"):
+		Audio.levelup()
+	if is_instance_valid(dim):
+		dim.queue_free()
+	_toast("Dica anotada! Use a seu favor.")
+
+# --- Atacadista: vender em lote com bônus de volume -----------------------
+func _open_bulk_sell(npc_id: String) -> void:
+	var npc: Dictionary = NPCs.NPCS[npc_id]
+	var parts := _modal_panel(Style.C_ORANGE)
+	var dim: ColorRect = parts[0]
+	var box: VBoxContainer = parts[1]
+	box.add_child(_hcenter(Style.avatar_badge(Style.npc_face_path(npc.arquetipo), Style.C_ORANGE, 96)))
+	box.add_child(Style.title(String(npc.nome), 30, Style.C_INK))
+	box.add_child(_centered_line("Compra em lote — quanto mais, maior o bônus!", 22, Style.C_INK_SOFT))
+	if GameState.inventory.is_empty():
+		box.add_child(_centered_line("Sua mochila está vazia.", 24, Style.C_INK_SOFT))
+	else:
+		for pid in GameState.inventory:
+			box.add_child(_bulk_row(npc_id, String(pid), dim))
+	var close := Button.new()
+	close.text = "Sair"
+	close.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(close, Style.C_NEUTRAL, Color.WHITE, 26, 84)
+	close.pressed.connect(dim.queue_free)
+	box.add_child(close)
+
+func _bulk_row(npc_id: String, product_id: String, dim: ColorRect) -> Control:
+	var p: Dictionary = Economy.PRODUCTS[product_id]
+	var qty: int = GameState.inventory.get(product_id, 0)
+	var rc: Color = Style.rarity_color(p.raridade)
+	var unit: float = Economy.price_at(GameState.current_city_id, product_id) * Collection.global_sell_multiplier() * Prestige.sell_mult()
+	var bonus: float = NPCs.bulk_bonus(npc_id, qty)
+	var total: float = unit * qty * (1.0 + bonus)
+	var card := _card(rc, 2)
+	var hb := HBoxContainer.new()
+	hb.add_theme_constant_override("separation", 12)
+	card.add_child(hb)
+	hb.add_child(Style.thumb_frame(Style.item_texture(product_id), rc, 78))
+	var info := VBoxContainer.new()
+	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	info.add_theme_constant_override("separation", 4)
+	hb.add_child(info)
+	info.add_child(Style.title("%d × %s" % [qty, String(p.nome)], 24, Style.C_INK))
+	info.add_child(Style.chip("bônus +%d%%" % int(round(bonus * 100.0)), Style.C_GREEN))
+	info.add_child(Style.price_ribbon(_fmt_money(total), Style.C_ORANGE))
+	var sell := Button.new()
+	sell.text = "Vender"
+	sell.custom_minimum_size = Vector2(160, 0)
+	_style_button(sell, Style.C_ORANGE, Color.WHITE, 24, 86)
+	Style.set_btn_icon(sell, "res://art/ui/ic_sell.svg", 28)
+	sell.pressed.connect(_do_bulk_sell.bind(npc_id, product_id, dim))
+	hb.add_child(sell)
+	return card
+
+func _do_bulk_sell(npc_id: String, product_id: String, dim: ColorRect) -> void:
+	var qty: int = GameState.inventory.get(product_id, 0)
+	if qty <= 0:
+		return
+	var unit: float = Economy.price_at(GameState.current_city_id, product_id) * Collection.global_sell_multiplier() * Prestige.sell_mult()
+	var bonus: float = NPCs.bulk_bonus(npc_id, qty)
+	var total: float = unit * qty * (1.0 + bonus)
+	GameState.remove_item(product_id, qty)
+	GameState.change_money(total)
+	GameState.emit_signal("item_sold", total)
+	NPCs.add_affinity(npc_id, 2)
+	_toast("Vendeu %d × %s por R$ %s (+%d%%)." % [qty, Economy.PRODUCTS[product_id].nome, _fmt_money(total), int(round(bonus * 100.0))])
+	if is_instance_valid(dim):
+		_open_bulk_sell(npc_id)
+	_sell_burst(clampi(qty, 6, 16))
 
 func _maybe_welcome() -> void:
 	if SaveSystem.pending_report.is_empty():

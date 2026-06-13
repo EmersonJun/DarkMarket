@@ -113,6 +113,44 @@ var NPCS := {
 		"paciencia": 0.80, "ganancia": 0.20,
 		"gosta": ["Antiguidades"], "odeia": ["Luxo"], "afinidade": 0,
 	},
+	# --- Fornecedores: VENDEM itens exclusivos da cidade (compra-do-NPC) ---
+	"forn_rural": {
+		"nome": "Velho Tonho", "cidade": "rural", "arquetipo": "Fornecedor",
+		"paciencia": 0.70, "ganancia": 0.35, "gosta": [], "odeia": [], "afinidade": 0,
+	},
+	"forn_centro": {
+		"nome": "Madame X", "cidade": "centro", "arquetipo": "Fornecedor",
+		"paciencia": 0.60, "ganancia": 0.40, "gosta": [], "odeia": [], "afinidade": 0,
+	},
+	"forn_porto": {
+		"nome": "O Capataz", "cidade": "porto", "arquetipo": "Fornecedor",
+		"paciencia": 0.65, "ganancia": 0.38, "gosta": [], "odeia": [], "afinidade": 0,
+	},
+	"forn_historica": {
+		"nome": "O Antiquário", "cidade": "historica", "arquetipo": "Fornecedor",
+		"paciencia": 0.75, "ganancia": 0.32, "gosta": [], "odeia": [], "afinidade": 0,
+	},
+	"forn_favela": {
+		"nome": "O Patrão", "cidade": "favela", "arquetipo": "Fornecedor",
+		"paciencia": 0.50, "ganancia": 0.45, "gosta": [], "odeia": [], "afinidade": 0,
+	},
+	"forn_fronteira": {
+		"nome": "El Jefe", "cidade": "fronteira", "arquetipo": "Fornecedor",
+		"paciencia": 0.70, "ganancia": 0.40, "gosta": [], "odeia": [], "afinidade": 0,
+	},
+	"forn_subterraneo": {
+		"nome": "O Arquiteto", "cidade": "subterraneo", "arquetipo": "Fornecedor",
+		"paciencia": 0.80, "ganancia": 0.50, "gosta": [], "odeia": [], "afinidade": 0,
+	},
+	# --- Atacadistas: compram em LOTE com bônus de volume ---
+	"atac_fronteira": {
+		"nome": "Gordo Atacado", "cidade": "fronteira", "arquetipo": "Atacadista",
+		"paciencia": 0.45, "ganancia": 0.50, "gosta": [], "odeia": [], "afinidade": 0,
+	},
+	"atac_historica": {
+		"nome": "Dona Feira", "cidade": "historica", "arquetipo": "Atacadista",
+		"paciencia": 0.55, "ganancia": 0.40, "gosta": ["Alimentos"], "odeia": [], "afinidade": 0,
+	},
 }
 
 func specialty(npc_id: String) -> String:
@@ -120,12 +158,53 @@ func specialty(npc_id: String) -> String:
 	match arch:
 		"Contrabandista Veterano": return "Negocia de tudo, com paciência"
 		"Receptador de Iguarias": return "Compra Alimentos — paga acima"
-		"Atravessador": return "Compra em volume — paga menos/unidade"
+		"Atravessador": return "Compra em lote — bônus por volume"
 		"Comprador Discreto": return "Quer Luxo e Colecionáveis"
-		"Colecionador Clandestino": return "Paga alto por itens Raros+"
+		"Colecionador Clandestino": return "Paga PRÊMIO por itens Raros+"
 		"Receptador de Relíquias": return "Quer Antiguidades — paga acima"
-		"Informante": return "Dá dicas e compra Luxo"
+		"Informante": return "Vende dicas de mercado"
+		"Fornecedor": return "VENDE itens exclusivos daqui"
+		"Atacadista": return "Compra em LOTE — bônus por volume"
 	return "Negocia diversos itens"
+
+# Função de UI deste NPC: como o jogador interage com ele.
+func npc_function(npc_id: String) -> String:
+	match String(NPCS[npc_id].arquetipo):
+		"Fornecedor": return "fornecedor"
+		"Informante": return "informante"
+		"Atacadista", "Atravessador": return "atacadista"
+		"Colecionador Clandestino": return "colecionador"
+	return "vender"
+
+# Itens que o Fornecedor desta cidade vende (exclusivos/raros + Mítico no subterrâneo).
+func supplier_stock(npc_id: String) -> Array:
+	var city: String = String(NPCS[npc_id].cidade)
+	var raros := ["Raro", "Épico", "Lendário"]
+	var out: Array = []
+	for pid in Economy.PRODUCTS:
+		var p: Dictionary = Economy.PRODUCTS[pid]
+		if Economy.origin_of(pid).has(city) and raros.has(String(p.raridade)):
+			out.append(pid)
+	if city == "subterraneo":
+		out.append("diamante_negro")
+	return out
+
+# Preço de compra no Fornecedor: prêmio sobre o mercado, com desconto por afinidade.
+func supplier_price(npc_id: String, product_id: String) -> float:
+	var npc: Dictionary = NPCS[npc_id]
+	var base_price: float = Economy.price_at(String(npc.cidade), product_id)
+	var disc: float = clampf(float(npc.afinidade) * 0.0025, 0.0, 0.25)
+	return snapped(base_price * 1.25 * (1.0 - disc), 1.0)
+
+# Bônus de volume do Atacadista/Atravessador (até +30%).
+func bulk_bonus(npc_id: String, qty: int) -> float:
+	if npc_function(npc_id) != "atacadista":
+		return 0.0
+	return clampf(0.02 * float(qty), 0.0, 0.30)
+
+# Prêmio do Colecionador para Raros+ (multiplicador extra no preço-alvo).
+func is_collector(npc_id: String) -> bool:
+	return npc_function(npc_id) == "colecionador"
 
 const RAROS := ["Raro", "Épico", "Lendário", "Mítico"]
 
@@ -232,3 +311,17 @@ func add_affinity(npc_id: String, delta: int) -> void:
 	var npc: Dictionary = NPCS[npc_id]
 	npc.afinidade = clampi(int(npc.afinidade) + delta, 0, 100)
 	emit_signal("affinity_changed", npc_id)
+
+# --- Combo de bons negócios (sessão) --------------------------------------
+var deal_combo: int = 0
+
+func register_good_deal() -> int:
+	deal_combo += 1
+	return deal_combo
+
+func break_combo() -> void:
+	deal_combo = 0
+
+# Bônus de R$ por combo (até +30%).
+func combo_bonus_frac() -> float:
+	return clampf(0.03 * float(deal_combo), 0.0, 0.30)

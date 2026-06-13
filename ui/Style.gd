@@ -74,6 +74,8 @@ var ARCHETYPE_SLUG := {
 	"Colecionador Clandestino": "colecionador",
 	"Receptador de Relíquias": "reliquias",
 	"Informante": "informante",
+	"Fornecedor": "fornecedor",
+	"Atacadista": "atacadista",
 }
 
 func npc_face_path(arquetipo: String) -> String:
@@ -563,15 +565,27 @@ var ITEM_SLUG := {
 	"maca": "carne",
 	"queijo_canastra": "queijo",
 	"mel_silvestre": "cachaca",
+	"cafe_contrabando": "cafe",
 	"camisa_basica": "camisa",
 	"perfume_urbano": "perfume",
+	"relogio_replica": "relogio",
+	"fone_pirata": "fone",
+	"tenis_fake": "tenis",
 	"bacalhau_seco": "bacalhau",
 	"especiarias_raras": "especiarias",
+	"perola_surrupiada": "perola",
+	"caviar_desviado": "caviar",
 	"container_misterio": "container",
+	"tequila_clande": "tequila",
+	"charuto_contra": "charuto",
 	"moeda_antiga": "moeda",
 	"manuscrito": "manuscrito",
 	"reliquia_pedra": "reliquia",
 	"lampião_velho": "lampiao",
+	"quadro_roubado": "quadro",
+	"cristal_roubado": "cristal",
+	"caveira_ouro": "caveira",
+	"diamante_negro": "diamante",
 }
 
 func item_icon_path(pid: String) -> String:
