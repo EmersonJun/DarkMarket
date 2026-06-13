@@ -99,6 +99,7 @@ func claim(c: Dictionary) -> bool:
 	GameState.change_money(float(c.reward))
 	if int(c.gems) > 0:
 		GameState.change_gems(int(c.gems))
+	GameState.bump_stat("contracts_completed", 1.0)
 	var idx: int = active.find(c)
 	if idx >= 0:
 		active[idx] = _new_contract()

@@ -67,6 +67,7 @@ func save_game() -> void:
 		"contracts": Contracts.serialize(),
 		"prestige": Prestige.serialize(),
 		"daily": DailyRewards.serialize(),
+		"stats": GameState.serialize_stats(),
 	}
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f == null:
@@ -131,6 +132,9 @@ func load_game() -> void:
 
 	if data.has("daily"):
 		DailyRewards.deserialize(data.get("daily", {}))
+
+	if data.has("stats"):
+		GameState.deserialize_stats(data.get("stats", {}))
 
 	_compute_idle(float(data.get("last_played", Time.get_unix_time_from_system())))
 
