@@ -399,6 +399,9 @@ func _on_propose() -> void:
 			_set_mood("irritado")
 			_hide_counter()
 			GameState.bump_stat("negotiations_lost", 1.0)
+			NPCs.break_combo()
+			if has_node("/root/Audio"):
+				Audio.error()
 
 func _on_accept_counter() -> void:
 	_set_mood("satisfeito")
@@ -416,6 +419,7 @@ func _on_pressure() -> void:
 		_finalize(asking, 0, "Sob pressão, %s cede: \"Tá bom, R$ %.2f... mas não abuse.\"" % [NPCs.NPCS[npc_id].nome, asking])
 	else:
 		response_lbl.text = "%s se irrita: \"Não force a barra!\" (afinidade -3)" % NPCs.NPCS[npc_id].nome
+		NPCs.break_combo()
 		_update_affinity_label()
 
 func _finalize(price: float, affinity_delta: int, msg: String) -> void:
@@ -423,13 +427,28 @@ func _finalize(price: float, affinity_delta: int, msg: String) -> void:
 		return
 	GameState.remove_item(product_id, 1)
 	var final_price: float = price * Collection.global_sell_multiplier() * Prestige.sell_mult()
-	GameState.change_money(final_price)
-	GameState.emit_signal("item_sold", final_price)
+	# Combo de bons negócios (sessão)
+	var combo: int = NPCs.register_good_deal()
+	var bonus_frac: float = NPCs.combo_bonus_frac()
+	# Prêmio do Colecionador por Raros+
+	var rar: String = String(Economy.PRODUCTS[product_id].raridade)
+	var is_premium: bool = NPCs.is_collector(npc_id) and NPCs.RAROS.has(rar)
+	var collector_frac: float = 0.25 if is_premium else 0.0
+	var total: float = final_price * (1.0 + bonus_frac + collector_frac)
+	GameState.change_money(total)
+	GameState.emit_signal("item_sold", total)
 	GameState.bump_stat("negotiations_won", 1.0)
-	if affinity_delta != 0:
-		NPCs.add_affinity(npc_id, affinity_delta)
+	var aff: int = affinity_delta + (1 if combo >= 3 else 0) + (1 if is_premium else 0)
+	if aff != 0:
+		NPCs.add_affinity(npc_id, aff)
+	_celebrate_deal(is_premium)
+	var extra: String = ""
+	if bonus_frac > 0.0:
+		extra += "  Combo x%d (+%d%%)" % [combo, int(round(bonus_frac * 100.0))]
+	if is_premium:
+		extra += "  PRÊMIO +25%"
 	response_lbl.add_theme_color_override("font_color", Color(0.5, 0.95, 0.55))
-	response_lbl.text = msg
+	response_lbl.text = msg + extra
 	_update_affinity_label()
 	_hide_counter()
 	await get_tree().create_timer(0.7).timeout
@@ -441,6 +460,16 @@ func _finalize(price: float, affinity_delta: int, msg: String) -> void:
 	else:
 		has_pressed = false
 		_refresh_products()
+
+func _celebrate_deal(premium: bool) -> void:
+	Style.pop(avatar_panel)
+	if has_node("/root/Audio"):
+		if premium:
+			Audio.levelup()
+		else:
+			Audio.coin()
+	var c: Vector2 = Vector2(size.x * 0.5, 70.0)
+	Style.confetti(self, c, 24 if premium else 14)
 
 func _show_counter() -> void:
 	accept_counter_btn.text = "Aceitar R$ %.2f" % counter_price
